@@ -7,7 +7,7 @@
 - ✅ Continuously query Apple's public *pickup status* endpoint every ~20 seconds from an awake, always-on Mac/computer.
 - ✅ Alert your phone immediately via **ntfy** and/or **Telegram**, with the correct Apple 256GB product page link and store name. Optionally open the product page on the Mac.
 - ✅ Deduplicate alerts until a store/color drops out of stock and reappears; handle network failures as **unknown** rather than incorrectly saying out of stock.
-- ✅ Optional GitHub Actions five-minute backup check and automated unit tests.
+- ✅ Manual-only GitHub Actions cloud stock scan and automated unit tests (no scheduled scanning after purchase).
 - 🧪 **Experimental opt-in local checkout attempt** in `checkout_bot.py`. With a previously authenticated Apple browser session and a one-time time-limited local authorization, it *can attempt* to add to bag, select pickup, verify the final order and submit it. **This has not been validated on Apple’s live checkout**; it fails closed when Apple’s interface cannot be verified, and it may need user intervention. No public supported auto-purchase API, no CAPTCHA/MFA bypass. Not affiliated with Apple.
 - ⚠️ **The 30-second goal applies only to best-case detection**, not guaranteed alert delivery or completed checkout. Apple can return HTTP 403/429/541, change its undocumented response, delay inventory, or rate-limit repeated queries. Cloud-hosted checks may be blocked. GitHub Actions schedule is not a 20-second timer.
 
@@ -52,13 +52,13 @@ Apple purchase price: **$1,999 before tax**. By default the links choose unlocke
 
 The project is published at https://github.com/lnterry6-max/iPhone-Duo . To run on your Mac, clone it with `git clone https://github.com/lnterry6-max/iPhone-Duo.git` and then `cd iPhone-Duo`. Configure `.env` locally and run the commands above. If you decide to make the public repository private, choose **Settings → General → Danger Zone → Change repository visibility**. Do not commit `.env`, notification topics, Apple credentials or session cookies. `.gitignore` excludes `.env` and `.state`.
 
-**Important:** GitHub Actions is a five-minute backup, not a 20-second always-on service. To approach a 30-second detection goal, a computer must actually run `watch` continuously while awake and online. Automatic checkout is an experimental, locally armed option, not enabled by default. It cannot guarantee an order; Apple's live flow has not been validated.
+**Important:** GitHub Actions is manual-only, not a 20-second always-on service. To approach a 30-second detection goal, a computer must actually run `watch` continuously while awake and online. Automatic checkout is an experimental, locally armed option, not enabled by default. It cannot guarantee an order; Apple's live flow has not been validated.
 
-## Optional GitHub Actions five-minute backup
+## Optional GitHub Actions manual cloud stock scan
 
-`.github/workflows/backup-scan.yml` checks from GitHub runners on a `*/5 * * * *` schedule and can be run manually from **Actions → Optional 5-minute cloud backup scan → Run workflow**.
+`.github/workflows/backup-scan.yml` can be triggered on demand from **Actions → Optional 5-minute cloud backup scan → Run workflow**.
 
-To receive backup pushes, add a repository Actions secret named `NTFY_TOPIC` (Settings → Secrets and variables → Actions). Optional Telegram secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. It attempts best-effort continuity using Actions cache; if cache is unavailable it may alert twice. Cloud IPs can receive HTTP 541, and cron runs may be delayed or skipped. **Do not use this scheduled workflow for a 30-second guarantee.**
+To receive backup pushes, add a repository Actions secret named `NTFY_TOPIC` (Settings → Secrets and variables → Actions). Optional Telegram secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`. It attempts best-effort continuity using Actions cache; if cache is unavailable it may alert twice. Cloud IPs can receive HTTP 541, and cron runs may be delayed or skipped. **There is no scheduled workflow; it will not send restock alerts after the local purchase lock is set unless you manually run it.**
 
 ## Monitor preferences
 
@@ -177,7 +177,7 @@ This requires a typed confirmation on your own computer, clears local authorizat
 ### Security and operational limitations
 
 - **Do not add Apple Account passwords, verification codes, payment numbers, or browser session cookies to GitHub, including Actions secrets.** A private repo or encrypted secret does not make a shopping password safe to use in cloud automation. Sign in only directly with Apple in the dedicated local browser.
-- GitHub Actions remains a read-only, slower stock-check backup. It never checks out or receives the sensitive checkout browser session.
+- GitHub Actions remains a read-only, manual stock-check option with no recurring schedule. It never checks out or receives the sensitive checkout browser session.
 - This checkout flow is experimental and has **not** been tested on a live accepted Apple order. Apple may require manual authentication, select a different pickup time, change page selectors, or refuse automated browser actions.
 - **Under-30-second checkout is not verified or guaranteed.** Google Routes validation and multiple inventory ZIPs add latency, and the request may be rate-limited.
 
