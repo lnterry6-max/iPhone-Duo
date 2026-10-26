@@ -8,11 +8,11 @@ import duo_monitor as m
 
 def sample(white="unavailable", black="unavailable"):
     return {"body": {"stores": [
-        {"storeNumber": "R001", "storeName": "Apple Example", "partsAvailability": {
+        {"storeNumber": "R001", "storeName": "Apple Natick", "partsAvailability": {
             "MK1E4LL/A": {"pickupDisplay": white},
             "MK1F4LL/A": {"pickupDisplay": black},
         }},
-        {"storeNumber": "R002", "storeName": "Apple Other", "partsAvailability": {
+        {"storeNumber": "R002", "storeName": "Apple Legacy Place", "partsAvailability": {
             "MK1E4LL/A": {"pickupDisplay": "unavailable"},
             "MK1F4LL/A": {"pickupDisplay": "unavailable"},
         }},
@@ -24,6 +24,26 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(set(m.PRODUCTS), {"MK1E4LL/A", "MK1F4LL/A"})
         self.assertIn("parts.0=MK1E4LL%2FA", m.stock_url("01609"))
         self.assertIn("parts.1=MK1F4LL%2FA", m.stock_url("01609"))
+
+    def test_ignores_all_other_apple_stores(self):
+        payload = sample("unavailable", "unavailable")
+        payload["body"]["stores"].append({
+            "storeNumber": "R999", "storeName": "Apple South Shore",
+            "partsAvailability": {
+                "MK1E4LL/A": {"pickupDisplay": "available"},
+                "MK1F4LL/A": {"pickupDisplay": "available"},
+            },
+        })
+        parsed = m.parse_inventory(payload, "01609")
+        self.assertNotIn("R999", {item.store_id for item in parsed})
+        self.assertEqual(len(parsed), 4)
+
+    def test_zip_with_no_allowed_stores_is_not_an_error(self):
+        payload = {"body": {"stores": [{
+            "storeNumber": "R999", "storeName": "Apple South Shore",
+            "partsAvailability": {"MK1E4LL/A": {"pickupDisplay": "available"}},
+        }]}}
+        self.assertEqual(m.parse_inventory(payload, "01609"), [])
 
     def test_unavailable_not_falsely_reported_available(self):
         items = m.parse_inventory(sample("unavailable", "available"), "01609")
@@ -56,7 +76,7 @@ class ProductTests(unittest.TestCase):
             config = {"zip_codes": ["01609"], "period": 20, "preferred": "Star White", "state_path": path,
                       "ntfy_topic": "", "ntfy_server": "https://ntfy.sh", "telegram_token": "",
                       "telegram_chat_id": "", "open_browser": False}
-            with patch.object(m, "fetch_inventory", return_value=sample("available")), patch.object(m, "send_alert", return_value=True) as notifier, patch.object(m, "canonical_store", return_value="Natick"), patch.object(m, "eligible_pickup_hours", return_value={15: 45}):
+            with patch.object(m, "fetch_inventory", return_value=sample("available")), patch.object(m, "send_alert", return_value=True) as notifier, patch.object(m, "eligible_pickup_hours", return_value={15: True}):
                 self.assertTrue(m.check(config, send=True))
                 self.assertTrue(m.check(config, send=True))
                 self.assertEqual(notifier.call_count, 1)
