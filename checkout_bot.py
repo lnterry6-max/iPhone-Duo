@@ -237,7 +237,7 @@ def attempt_page(page, sku: str, store_name: str, zip_code: str, limit: float, a
     ensure_apple(page.url)
     summary = find_summary(page)
     actual = summary_ok(summary, sku, store_name, limit)
-    if assert_pickup_slot(summary) not in allowed_hours:
+    if assert_pickup_slot(summary, require_future=True) not in allowed_hours:
         raise CheckoutError("Requested pickup slot cannot be verified within an hour of Worcester")
     final = page.get_by_role("button", name=re.compile(r"^(?:Place (?:Your )?Order|Complete Purchase)$", re.I))
     if final.count() != 1 or not final.is_visible() or not final.is_enabled():
