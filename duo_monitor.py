@@ -86,7 +86,7 @@ def load_env(path: Path) -> None:
 
 
 def get_config() -> dict[str, Any]:
-    zip_codes = [z.strip() for z in os.getenv("ZIP_CODES", "01609").split(",") if z.strip()]
+    zip_codes = [z.strip() for z in os.getenv("ZIP_CODES", "01609,01760,02116,02467,02026").split(",") if z.strip()]
     if not zip_codes or any(len(z) != 5 or not z.isascii() or not z.isdecimal() for z in zip_codes):
         raise ValueError("ZIP_CODES must be a comma-separated list of 5-digit U.S. ZIP codes")
     period = float(os.getenv("POLL_SECONDS", "20"))
@@ -145,13 +145,15 @@ def parse_inventory(payload: dict[str, Any], zip_code: str) -> list[Stock]:
         raise InventoryError("No nearby stores in Apple response (could be an API change)")
     output = []
     recognized = 0
+    approved_seen = 0
     for store in stores:
         if not isinstance(store, dict):
             continue
         sid = str(store.get("storeNumber") or store.get("storeId") or "").strip()
         sname = str(store.get("storeName") or store.get("name") or sid).strip()
-        if not sid:
-            continue
+        if not sid or canonical_store(sname) is None:
+            continue  # Strict five-store allowlist, even if Apple returned more locations.
+        approved_seen += 1
         pa = store.get("partsAvailability")
         if not isinstance(pa, dict):
             continue
@@ -169,8 +171,10 @@ def parse_inventory(payload: dict[str, Any], zip_code: str) -> list[Stock]:
             else:
                 status = "unknown"
             output.append(Stock(sname, sid, sku, label, status, zip_code))
+    if approved_seen == 0:
+        return []  # This ZIP did not return any of the approved Apple Stores.
     if recognized == 0:
-        raise InventoryError("No recognizable pickup states for either 256GB SKU; check Apple product IDs/API")
+        raise InventoryError("No recognizable pickup status for the approved five Apple Stores; check Apple API")
     return output
 
 
@@ -316,38 +320,38 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     new, updated = compute_new_stock(all_items, state["status"])
     # If notifications fail, do not forget the new matches; retry on next poll.
     if new:
-        # Only approved stores, with a traffic-aware Google route for the requested pickup day.
-        # Never purchase OR alert from stores whose drive time cannot be verified.
-        candidates = preferred_first([x for x in new if canonical_store(x.store)], config["preferred"])
-        verified = []
+        # Only the five selected stores, with an authorized future pickup hour.
+        # No route API is used: travel time is NOT verified.
+        candidates = preferred_first(
+            [item for item in new if canonical_store(item.store) is not None],
+            config["preferred"],
+        )
+        eligible = []
         for candidate in candidates:
             try:
                 hours = eligible_pickup_hours(candidate.store)
-                verified.append(candidate)
-                LOG.info("Pickup eligible: %s (estimated drive: %s)", candidate.store,
-                         ", ".join(f"{hour}:00 PM ~{mins:.0f} min" for hour, mins in hours.items()))
+                eligible.append(candidate)
+                LOG.info("Approved store: %s; allowed future pickup hours: %s (drive time unverified)",
+                         candidate.store, ", ".join(f"{hour-12}:00 PM" for hour in hours))
             except PickupConstraintError as exc:
-                LOG.warning("Rejected store %s: %s", candidate.store, exc)
-        if not verified:
-            # Do not consume otherwise matching in-stock states: retry if routing is configured later.
-            for item in candidates:
+                LOG.info("Ignored store %s: %s", candidate.store, exc)
+        # Keep new matches available for future recheck if their time constraint is unconfirmed.
+        for item in candidates:
+            if item not in eligible:
                 updated.pop(item.key, None)
+        if not eligible:
             state["status"] = updated
             state["last_check_utc"] = datetime.now(timezone.utc).isoformat()
             write_state(config["state_path"], state)
             return not errors
-        # Remove unverified candidates from the deduplication state so they can be retried.
-        for item in candidates:
-            if item not in verified:
-                updated.pop(item.key, None)
-        new = verified
+        new = eligible
         top = new[0]
         buy_url = BUY_URLS[top.sku]
         lines = [f"{s.label} | {s.store} ({s.store_id})" for s in new[:8]]
         message = "Apple pickup stock detected near ZIP " + ",".join(config["zip_codes"]) + ":\n" + "\n".join(lines)
         if len(new) > 8:
             message += f"\n...and {len(new) - 8} more matches"
-        message += "\nPickup October 27 at 3:00 or 4:00 PM only; verified estimated driving time <=55 min. Auto checkout requires local consent."
+        message += "\nOct 27 pickup at 3:00 or 4:00 PM only; Apple final summary must verify the slot. Drive time NOT verified. Auto checkout requires local consent."
         LOG.warning("NEW STOCK: %s", message.replace("\n", " | "))
         delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
         initiated = False
