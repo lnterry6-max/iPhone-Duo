@@ -81,6 +81,12 @@ python -m playwright install chromium
 python checkout_bot.py login
 ```
 
+The bot now opens **regular installed Google Chrome**, using a dedicated local profile (`~/.duo-stock-scout/apple-browser-chrome`) rather than Chrome for Testing. This is separate from your normal Safari and Chrome logins. In `.env`, keep `CHECKOUT_BROWSER=chrome`. Install normal Chrome first if it is not already installed. Playwright supports this browser channel, but Apple may still refuse or fail to finish sign-in.
+
+**Important sign-in check:** if Apple's sign-in page keeps spinning, redirects back to sign-in, or never shows your account details, return to Terminal and press Enter to cancel. The bot will *not* treat that as an authenticated session. Type `VERIFIED` only after you can visibly access your Apple Store Account page in **the same automated Chrome window**. That acknowledgment expires after 24 hours and is not proof that Apple will allow checkout later.
+
+For diagnosis, first sign in manually using **ordinary Chrome outside the bot** (without importing/exporting cookies). If regular Chrome works but this dedicated automated Chrome window does not, leave `AUTO_CHECKOUT=false`: use the stock monitor's alerts and Apple's normal Safari checkout manually. Do not copy browser session cookies, bypass verification challenges, or store your password in GitHub.
+
 Check that your Apple bag is empty, your payment details are correct, and Apple has the right account. **If you already have a delivery order, an additional pickup order would be a second purchase.** Decide how to handle the existing order first.
 
 Explicitly authorize one charge with an inclusive maximum and expiration:
