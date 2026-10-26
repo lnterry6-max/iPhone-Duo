@@ -56,7 +56,7 @@ class ProductTests(unittest.TestCase):
             config = {"zip_codes": ["01609"], "period": 20, "preferred": "Star White", "state_path": path,
                       "ntfy_topic": "", "ntfy_server": "https://ntfy.sh", "telegram_token": "",
                       "telegram_chat_id": "", "open_browser": False}
-            with patch.object(m, "fetch_inventory", return_value=sample("available")), patch.object(m, "send_alert", return_value=True) as notifier:
+            with patch.object(m, "fetch_inventory", return_value=sample("available")), patch.object(m, "send_alert", return_value=True) as notifier, patch.object(m, "canonical_store", return_value="Natick"), patch.object(m, "eligible_pickup_hours", return_value={15: 45}):
                 self.assertTrue(m.check(config, send=True))
                 self.assertTrue(m.check(config, send=True))
                 self.assertEqual(notifier.call_count, 1)
