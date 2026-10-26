@@ -18,12 +18,14 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from duo_monitor import BUY_URLS, PRODUCTS, fetch_inventory, parse_inventory, InventoryError, get_config, send_alert
+from duo_monitor import BUY_URLS, PRODUCTS, fetch_inventory, parse_inventory, InventoryError, get_config, send_alert, load_env
+from pickup_rules import assert_pickup_slot, canonical_store, eligible_pickup_hours, PickupConstraintError
 
 LOG = logging.getLogger("duo_checkout")
 PROFILE = Path.home() / ".duo-stock-scout" / "apple-browser"
 AUTH = Path.home() / ".duo-stock-scout" / "authorization.json"
 LOCK = Path.home() / ".duo-stock-scout" / "checkout.lock"
+PURCHASE_LOCK = Path.home() / ".duo-stock-scout" / "purchase-lock.json"
 ALLOWED_SKUS = frozenset(PRODUCTS)
 
 
@@ -72,6 +74,8 @@ def validate_auth(auth: dict, sku: str, now: float | None = None) -> None:
 
 
 def arm(args: argparse.Namespace) -> None:
+    if PURCHASE_LOCK.exists():
+        raise CheckoutError("A checkout was already attempted. Check Apple orders first; the purchase lock must be explicitly reset.")
     if not (1999 <= args.max_total <= 3000):
         raise CheckoutError("Set a dollar maximum between $1999 and $3000 (including tax)")
     if not (0 < args.hours <= 24):
@@ -173,6 +177,9 @@ def summary_ok(summary: str, sku: str, store: str, limit: float) -> float:
     """Fail closed unless the final ORDER SUMMARY contains model, color, qty, pickup, and total."""
     if sku not in ALLOWED_SKUS:
         raise CheckoutError("SKU rejected")
+    if canonical_store(store) is None:
+        raise CheckoutError("Pickup store is not in the five-store allowlist")
+    assert_pickup_slot(summary)
     color = "Star White" if sku == "MK1E4LL/A" else "Night Sky"
     normalized = re.sub(r"\s+", " ", summary).lower()
     must = ("iphone duo", "256gb", color.lower(), store.lower(), "pick up")
@@ -207,7 +214,7 @@ def find_summary(page) -> str:
     raise CheckoutError("Cannot identify verified order summary; refusing to submit payment")
 
 
-def attempt_page(page, sku: str, store_name: str, zip_code: str, limit: float) -> float:
+def attempt_page(page, sku: str, store_name: str, zip_code: str, limit: float, allowed_hours: set[int]) -> float:
     """Best-effort Apple flow: never guesses at buttons or bypasses verification."""
     url = BUY_URLS[sku]
     ensure_apple(url)
@@ -228,7 +235,10 @@ def attempt_page(page, sku: str, store_name: str, zip_code: str, limit: float) -
         if not select_button(page, (r"^continue$", r"^review order$", r"^review your order$"), required=False):
             break
     ensure_apple(page.url)
-    actual = summary_ok(find_summary(page), sku, store_name, limit)
+    summary = find_summary(page)
+    actual = summary_ok(summary, sku, store_name, limit)
+    if assert_pickup_slot(summary) not in allowed_hours:
+        raise CheckoutError("Requested pickup slot cannot be verified within an hour of Worcester")
     final = page.get_by_role("button", name=re.compile(r"^(?:Place (?:Your )?Order|Complete Purchase)$", re.I))
     if final.count() != 1 or not final.is_visible() or not final.is_enabled():
         raise CheckoutError("Verified order is not on the final payment submission screen")
@@ -246,6 +256,8 @@ def notify_checkout(title: str, message: str, sku: str) -> None:
 def attempt(args: argparse.Namespace) -> None:
     auth = read_auth()
     validate_auth(auth, args.sku)
+    if PURCHASE_LOCK.exists():
+        raise CheckoutError("Prior checkout attempt or purchase lock detected; no repeat orders")
     if not args.store_id or not args.store_name:
         raise CheckoutError("Store identity required")
     # Lock protects against two overlapping alerts; consumed even on error to prevent retries/duplicates.
@@ -256,21 +268,40 @@ def attempt(args: argparse.Namespace) -> None:
     except BlockingIOError as exc:
         os.close(fd)
         raise CheckoutError("Another checkout is running; refusing a duplicate attempt") from exc
+    # Durable global lock is written BEFORE navigating checkout, not after payment.
+    # A crash or unknown response therefore cannot cause an automatic second order.
+    atomic_json(PURCHASE_LOCK, {"status": "checkout_started", "sku": args.sku,
+                                "store_id": args.store_id,
+                                "started_at": datetime.now(timezone.utc).isoformat()})
     auth["status"] = "attempted"
     auth["attempted_at"] = datetime.now(timezone.utc).isoformat()
     atomic_json(AUTH, auth)
     s = verify_stock(args.sku, args.store_id, args.zip_code)
     if s.store.casefold() != args.store_name.casefold():
         raise CheckoutError("Apple changed pickup store identity")
+    valid_hours = eligible_pickup_hours(s.store)
     sync_playwright, _ = get_playwright()
     with sync_playwright() as p:
         context = browser_context(p)
         page = context.pages[0] if context.pages else context.new_page()
         try:
-            actual = attempt_page(page, args.sku, s.store, args.zip_code, float(auth["max_total_usd"]))
-            print(f"Order submission clicked for {PRODUCTS[args.sku]} at {s.store}; verified total ${actual:.2f}.")
-            print("Check Apple account/email for final acceptance. Never retry automatically.")
-            notify_checkout("Duo checkout submitted - VERIFY", f"Submitted Apple order button for {PRODUCTS[args.sku]} at {s.store}, ${actual:.2f}. Verify confirmation in Apple directly; not yet proven accepted.", args.sku)
+            actual = attempt_page(page, args.sku, s.store, args.zip_code, float(auth["max_total_usd"]), set(valid_hours))
+            # A click alone does NOT mean the order was accepted. Keep purchase lock either way.
+            status = "submitted_unverified"
+            try:
+                page.wait_for_timeout(2500)
+                confirmation = page.locator("body").inner_text(timeout=5000).lower()
+                if re.search(r"thank you for your order|order placed|order confirmed", confirmation) and re.search(r"order (?:number|#)", confirmation):
+                    status = "confirmed"
+            except Exception:
+                pass
+            atomic_json(PURCHASE_LOCK, {
+                "status": status, "sku": args.sku, "store_id": args.store_id,
+                "total_usd": actual, "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            print(f"Apple order button clicked: {status}; total validated: ${actual:.2f}.")
+            print("Monitoring stops. Check Apple Orders and your email. NEVER rearm without verifying.")
+            notify_checkout("Duo checkout halted - verify order", f"Status: {status} for {PRODUCTS[args.sku]} at {s.store}, ${actual:.2f}. No further purchasing is permitted until manual review.", args.sku)
         except Exception as exc:
             print("Automated Apple checkout stopped without a confirmed submission.", file=sys.stderr)
             notify_checkout("Duo checkout needs attention", f"Apple checkout stopped: {type(exc).__name__}. Inspect the Apple checkout and your email; do not rearm before checking for an order.", args.sku)
@@ -292,6 +323,7 @@ def main() -> int:
     a.add_argument("--max-total", type=float, required=True, help="Maximum USD charge including tax")
     a.add_argument("--hours", type=float, default=4)
     commands.add_parser("disarm", help="Revoke purchase authorization")
+    commands.add_parser("reset-purchase-lock", help="Manually unlock only after checking Apple orders")
     t = commands.add_parser("attempt", help="Triggered by the local stock monitor only")
     t.add_argument("--sku", choices=list(PRODUCTS), required=True)
     t.add_argument("--store-id", required=True)
@@ -299,6 +331,7 @@ def main() -> int:
     t.add_argument("--zip-code", default="01609")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    load_env(Path(".env"))
     try:
         if args.command == "login":
             login()
@@ -306,10 +339,18 @@ def main() -> int:
             arm(args)
         elif args.command == "disarm":
             AUTH.unlink(missing_ok=True)
-            print("Authorization revoked; existing checkout process, if any, must be stopped manually")
+            print("Authorization revoked; any checkout currently running must also be stopped manually")
+        elif args.command == "reset-purchase-lock":
+            print("FIRST inspect Apple Orders and your confirmation email for any purchase or pending charge.")
+            print("If ANY order was submitted or you are uncertain, do not reset.")
+            if input("Type I VERIFIED NO APPLE ORDER to permit a future attempt: ").strip() != "I VERIFIED NO APPLE ORDER":
+                raise CheckoutError("Purchase lock retained")
+            PURCHASE_LOCK.unlink(missing_ok=True)
+            AUTH.unlink(missing_ok=True)
+            print("Local purchase lock reset; still disarmed. Re-authorization required.")
         else:
             attempt(args)
-    except (CheckoutError, OSError, ValueError) as exc:
+    except (CheckoutError, PickupConstraintError, OSError, ValueError) as exc:
         LOG.error("%s", exc)
         return 2
     return 0
