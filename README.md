@@ -135,3 +135,50 @@ python3 checkout_bot.py disarm
 ```
 
 The `login` browser is **not** your everyday Safari login. A Safari session cannot simply be reused by Playwright. GitHub Actions only makes read-only inventory requests; it must never receive your Apple Account password, 2FA codes, payment details, or browser cookies. The experiment does not try to defeat Apple anti-bot, CAPTCHA or payment security.
+
+## October 27, 2026 pickup-only rules and one-purchase shutdown
+
+These rules are enforced in `pickup_rules.py`, `duo_monitor.py`, and `checkout_bot.py`. All five Apple Stores below are considered, **not** automatically assumed within a one-hour drive:
+
+| Apple Store | Official address |
+| --- | --- |
+| The Shops at Blackstone Valley | 70 Worcester-Providence Turnpike, Millbury, MA 01527 |
+| Natick | 1245 Worcester Street, Natick, MA 01760 |
+| Boylston Street | 815 Boylston Street, Boston, MA 02116 |
+| Chestnut Hill | 199 Boylston Street, Chestnut Hill, MA 02467 |
+| Legacy Place | 508 Legacy Place, Dedham, MA 02026 |
+
+A store is eligible only when **both** conditions hold:
+1. Google Maps Routes API returns a traffic-aware drive of **at most 55 minutes** from `ORIGIN_ADDRESS` (default: approximate Worcester ZIP 01609) for a departure one hour before the desired pickup time. The five-minute margin helps protect the user's strict **one-hour maximum**, but cannot guarantee actual travel times or account for the exact home address. Boston-area traffic may make Boylston Street, Chestnut Hill, or Legacy Place ineligible.
+2. Apple's **final checkout order summary** explicitly shows pickup on **Tuesday, October 27, 2026**, at **exactly 3:00 PM or 4:00 PM**. The stock endpoint alone never proves a pickup timeslot. If Apple's checkout cannot confirm the date and time, **automatic payment is refused**. When Apple needs manual date/time selection, the bot stops rather than guessing or placing an unwanted order.
+
+### Configure traffic-aware driving eligibility
+
+You must have a locally configured **Google Maps Platform Routes API** key; the API requires billing. Enable the Routes API and create a restricted API key in Google Cloud, with sensible quotas and budget alerts, then set `GOOGLE_MAPS_API_KEY=...` inside the local, uncommitted `.env`. See [official Google setup](https://developers.google.com/maps/documentation/routes/get-api-key) and [billing details](https://developers.google.com/maps/documentation/routes/usage-and-billing).
+
+By default, routing starts from **Worcester, MA 01609**, not your exact location. If a precise drive-time constraint is important, set `ORIGIN_ADDRESS` **locally** to your real departure point, but never commit it or send it to GitHub. Routes data is an estimate, not a guarantee.
+
+For wider Apple Store inventory coverage, set `ZIP_CODES=01609,02116,02467,02026`. These search ZIPs do **not** change the driving origin. Checking multiple ZIPs can take longer and trigger Apple's rate limits; do not use proxy rotation or evade traffic controls.
+
+If the Routes API key, traffic estimate, allowed store, or Apple pickup timeslot is missing or cannot be verified, the bot **does not buy**. Missing route verification also suppresses qualifying stock alerts rather than advertising stores as one-hour-eligible without evidence.
+
+### Hard stop after a first checkout attempt
+
+**Once any automated checkout attempt begins**, a persistent file is written to `~/.duo-stock-scout/purchase-lock.json`. The monitor notices the lock, exits within about a second of its next sleep check, and never places a second order. The purchase lock survives a reboot and **even a crash or an ambiguous order submission**. A possible Apple order is treated as `submitted_unverified` until independently confirmed. A successful confirmation page can mark it `confirmed`; a click alone is not proof of purchase.
+
+The lock cannot be bypassed just by restarting `watch` or running `arm` again. Before considering a new attempt, check **Apple Orders, payment activity, and email** to make sure no purchase exists or is pending. Only if you independently verify *no order was made*, use:
+
+```bash
+python3 checkout_bot.py reset-purchase-lock
+```
+
+This requires a typed confirmation on your own computer, clears local authorization, and **does not automatically re-arm**. Never reset a lock after an accepted or uncertain purchase. **Do not delete or edit the lock manually.**
+
+### Security and operational limitations
+
+- **Do not add Apple Account passwords, verification codes, payment numbers, or browser session cookies to GitHub, including Actions secrets.** A private repo or encrypted secret does not make a shopping password safe to use in cloud automation. Sign in only directly with Apple in the dedicated local browser.
+- GitHub Actions remains a read-only, slower stock-check backup. It never checks out or receives the sensitive checkout browser session.
+- This checkout flow is experimental and has **not** been tested on a live accepted Apple order. Apple may require manual authentication, select a different pickup time, change page selectors, or refuse automated browser actions.
+- **Under-30-second checkout is not verified or guaranteed.** Google Routes validation and multiple inventory ZIPs add latency, and the request may be rate-limited.
+
+Run offline tests: `python3 -m unittest discover -s tests -v`.
