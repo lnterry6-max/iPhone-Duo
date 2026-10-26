@@ -1,4 +1,8 @@
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+import checkout_bot as bot
 from checkout_bot import CheckoutError, summary_ok, validate_auth
 
 
@@ -18,6 +22,28 @@ class AuthorizationTests(unittest.TestCase):
     def test_refuses_expired(self):
         with self.assertRaises(CheckoutError):
             validate_auth({'status':'armed','expires_at':1000,'max_total_usd':2200,'quantity':1,'allow_submit':True}, 'MK1E4LL/A', now=2000)
+
+    
+class LoginSafetyTests(unittest.TestCase):
+    def test_browser_default_is_installed_chrome(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(bot.checkout_browser(), "chrome")
+            self.assertTrue(str(bot.browser_profile()).endswith("apple-browser-chrome"))
+
+    def test_testing_browser_uses_distinct_local_profile(self):
+        with patch.dict("os.environ", {"CHECKOUT_BROWSER": "chromium"}):
+            self.assertTrue(str(bot.browser_profile()).endswith("apple-browser-chromium"))
+
+    def test_invalid_browser_refused(self):
+        with patch.dict("os.environ", {"CHECKOUT_BROWSER": "safari"}):
+            with self.assertRaises(CheckoutError):
+                bot.checkout_browser()
+
+    def test_spinning_login_cannot_enable_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(bot, "LOGIN_CONFIRMATION", Path(tmp) / "no-confirmed-login.json"):
+            with self.assertRaises(CheckoutError):
+                bot.require_verified_login()
+
 
 
 class SummaryTests(unittest.TestCase):
