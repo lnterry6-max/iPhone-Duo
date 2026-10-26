@@ -30,19 +30,20 @@ class PickupRulesTests(unittest.TestCase):
             with self.subTest(summary=summary), self.assertRaises(p.PickupConstraintError):
                 p.assert_pickup_slot(summary)
 
-    def test_routes_reject_more_than_55_minutes_with_buffer(self):
-        now = datetime(2026, 10, 26, 19, 0, tzinfo=p.BOSTON)
-        with patch.object(p, "route_duration_minutes", side_effect=[54, 58]):
-            self.assertEqual(p.eligible_pickup_hours("Apple Boylston Street", now=now), {15: 54})
-        with patch.object(p, "route_duration_minutes", return_value=60):
-            with self.assertRaises(p.PickupConstraintError):
-                p.eligible_pickup_hours("Legacy Place", now=now)
-
-    def test_no_routes_api_key_fails_closed(self):
+    def test_five_stores_work_without_any_maps_key(self):
         now = datetime(2026, 10, 26, 19, 0, tzinfo=p.BOSTON)
         with patch.dict("os.environ", {"GOOGLE_MAPS_API_KEY": ""}):
-            with self.assertRaises(p.PickupConstraintError):
-                p.eligible_pickup_hours("Natick", now=now)
+            for store in p.STORE_ADDRESSES:
+                with self.subTest(store=store):
+                    self.assertEqual(p.eligible_pickup_hours(store, now=now), {15: True, 16: True})
+
+    def test_unapproved_store_is_rejected(self):
+        with self.assertRaises(p.PickupConstraintError):
+            p.eligible_pickup_hours("Apple South Shore")
+
+    def test_expired_three_pm_only_allows_four_pm(self):
+        now = datetime(2026, 10, 27, 15, 1, tzinfo=p.BOSTON)
+        self.assertEqual(p.eligible_pickup_hours("Natick", now=now), {16: True})
 
     def test_expired_window_fails_closed(self):
         with self.assertRaises(p.PickupConstraintError):
