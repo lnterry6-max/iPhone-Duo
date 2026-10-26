@@ -39,7 +39,7 @@ def canonical_store(store: str) -> str | None:
                  if value == re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()), None)
 
 
-def assert_pickup_slot(summary: str) -> int:
+def assert_pickup_slot(summary: str, *, require_future: bool = False) -> int:
     """Require the order's pickup summary to show Oct 27 AND precisely 3 or 4 PM."""
     normalized = re.sub(r"\s+", " ", summary).lower()
     if not re.search(r"\b(?:oct(?:ober)?\.?\s+27(?:,?\s+2026)?|10/27(?:/2026)?|2026-10-27)\b", normalized):
@@ -48,13 +48,14 @@ def assert_pickup_slot(summary: str) -> int:
         raise PickupConstraintError("Not an in-store pickup order")
     # Only exact :00 time starts; 3:30 and 4:30 are NOT accepted.
     matches = re.findall(r"(?<!\d)([34]):00\s*p\.?m\.?(?!\w)", normalized)
-    hours = [int(v) for v in matches if int(v) in PICKUP_HOURS]
+    hours = [int(v) + 12 for v in matches if int(v) + 12 in PICKUP_HOURS]
     if not hours:
         raise PickupConstraintError("Order summary must show an exact 3:00 PM or 4:00 PM pickup")
-    # Fail if the stated pickup day/time has already passed at the instant of submission.
-    now = datetime.now(BOSTON)
-    if now.date() > PICKUP_DATE or (now.date() == PICKUP_DATE and all(now.hour >= h for h in hours)):
-        raise PickupConstraintError("Requested pickup window has passed")
+    # During live purchase, do not submit for a pickup time that has passed.
+    if require_future:
+        now = datetime.now(BOSTON)
+        if all(datetime.combine(PICKUP_DATE, time(h, 0), BOSTON) <= now for h in hours):
+            raise PickupConstraintError("Requested pickup window has passed")
     return hours[0]
 
 
