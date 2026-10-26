@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from pickup_rules import canonical_store, eligible_pickup_hours, PickupConstraintError
+
 API = "https://www.apple.com/shop/retail/pickup-message"
 BUY_URLS = {
     "MK1E4LL/A": "https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-star-white-unlocked",
@@ -33,6 +35,19 @@ PRODUCTS = {
     "MK1F4LL/A": "Night Sky — 256GB",
 }
 LOG = logging.getLogger("duo_stock_scout")
+PURCHASE_LOCK = Path.home() / ".duo-stock-scout" / "purchase-lock.json"
+
+
+def purchase_lock_reason() -> str | None:
+    """Persistent global stop switch; even interrupted/uncertain orders remain locked."""
+    if not PURCHASE_LOCK.exists():
+        return None
+    try:
+        status = json.loads(PURCHASE_LOCK.read_text(encoding="utf-8")).get("status", "unknown")
+    except (OSError, ValueError):
+        status = "unreadable"
+    return f"Purchase lock exists ({status}). Monitoring and checkout are stopped; verify Apple Orders before resetting."
+
 
 
 class InventoryError(Exception):
@@ -270,6 +285,10 @@ def launch_checkout_bot(stock: Stock, config: dict[str, Any]) -> bool:
 
 def check(config: dict[str, Any], *, send: bool = True) -> bool:
     """Run a round. Returns true when Apple responded validly to every configured ZIP."""
+    reason = purchase_lock_reason()
+    if reason:
+        LOG.warning("%s", reason)
+        return True
     all_items = []
     errors = []
     for zip_code in config["zip_codes"]:
@@ -297,14 +316,38 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     new, updated = compute_new_stock(all_items, state["status"])
     # If notifications fail, do not forget the new matches; retry on next poll.
     if new:
-        new = preferred_first(new, config["preferred"])
+        # Only approved stores, with a traffic-aware Google route for the requested pickup day.
+        # Never purchase OR alert from stores whose drive time cannot be verified.
+        candidates = preferred_first([x for x in new if canonical_store(x.store)], config["preferred"])
+        verified = []
+        for candidate in candidates:
+            try:
+                hours = eligible_pickup_hours(candidate.store)
+                verified.append(candidate)
+                LOG.info("Pickup eligible: %s (estimated drive: %s)", candidate.store,
+                         ", ".join(f"{hour}:00 PM ~{mins:.0f} min" for hour, mins in hours.items()))
+            except PickupConstraintError as exc:
+                LOG.warning("Rejected store %s: %s", candidate.store, exc)
+        if not verified:
+            # Do not consume otherwise matching in-stock states: retry if routing is configured later.
+            for item in candidates:
+                updated.pop(item.key, None)
+            state["status"] = updated
+            state["last_check_utc"] = datetime.now(timezone.utc).isoformat()
+            write_state(config["state_path"], state)
+            return not errors
+        # Remove unverified candidates from the deduplication state so they can be retried.
+        for item in candidates:
+            if item not in verified:
+                updated.pop(item.key, None)
+        new = verified
         top = new[0]
         buy_url = BUY_URLS[top.sku]
         lines = [f"{s.label} | {s.store} ({s.store_id})" for s in new[:8]]
         message = "Apple pickup stock detected near ZIP " + ",".join(config["zip_codes"]) + ":\n" + "\n".join(lines)
         if len(new) > 8:
             message += f"\n...and {len(new) - 8} more matches"
-        message += "\nReview Apple immediately. Auto-checkout runs only if armed on your own Mac."
+        message += "\nPickup October 27 at 3:00 or 4:00 PM only; verified estimated driving time <=55 min. Auto checkout requires local consent."
         LOG.warning("NEW STOCK: %s", message.replace("\n", " | "))
         delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
         initiated = False
@@ -352,6 +395,11 @@ def main() -> int:
                  ",".join(config["zip_codes"]), config["period"], config["preferred"])
         errors_in_row = 0
         while True:
+            reason = purchase_lock_reason()
+            if reason:
+                LOG.warning("%s", reason)
+                LOG.warning("Exiting watcher; no additional purchase attempts.")
+                break
             try:
                 if check(config, send=not args.no_notify):
                     errors_in_row = 0
@@ -365,7 +413,15 @@ def main() -> int:
             delay = max(15, backoff + random.uniform(-2, 2))
             if errors_in_row:
                 LOG.warning("Check errors=%d; waiting %.1f seconds before retry", errors_in_row, delay)
-            time.sleep(delay)
+            # Stop as soon as an order attempt creates its permanent purchase lock.
+            remaining = delay
+            while remaining > 0:
+                if purchase_lock_reason():
+                    LOG.warning("Purchase lock detected. Shutting down watcher immediately.")
+                    return 0
+                tick = min(1.0, remaining)
+                time.sleep(tick)
+                remaining -= tick
     except KeyboardInterrupt:
         LOG.info("Stopped by user")
         return 0
