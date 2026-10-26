@@ -1,7 +1,5 @@
-name: Optional 5-minute cloud backup scan
+name: Manual cloud stock scan (no purchases)
 on:
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
