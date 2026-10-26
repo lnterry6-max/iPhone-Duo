@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """iPhone Duo 256GB Apple retail pickup stock monitor. Standard library only.
 
-Read-only inventory checking. Does not add items to a bag or submit purchases.
+Read-only inventory checking. Optional checkout only on locally armed computers.
 """
 from __future__ import annotations
 
@@ -90,6 +90,7 @@ def get_config() -> dict[str, Any]:
         "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         "open_browser": os.getenv("OPEN_BROWSER", "false").lower() in ("true", "1", "yes"),
+        "auto_checkout": os.getenv("AUTO_CHECKOUT", "false").lower() in ("true", "1", "yes"),
     }
 
 
@@ -244,6 +245,29 @@ def open_checkout_page(url: str) -> None:
             LOG.warning("Unable to open browser: %s", exc)
 
 
+def launch_checkout_bot(stock: Stock, config: dict[str, Any]) -> bool:
+    """Only local, opt-in checkout attempts; never from GitHub-hosted runners."""
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+        LOG.error("Automatic checkout disabled in GitHub Actions")
+        return False
+    script = Path(__file__).resolve().with_name("checkout_bot.py")
+    if not script.exists():
+        LOG.error("checkout_bot.py missing; checkout not started")
+        return False
+    try:
+        state_dir = Path(config["state_path"]).parent
+        state_dir.mkdir(parents=True, exist_ok=True)
+        with (state_dir / "checkout-bot.log").open("a", encoding="utf-8") as log:
+            subprocess.Popen([sys.executable, str(script), "attempt", "--sku", stock.sku,
+                              "--store-id", stock.store_id, "--store-name", stock.store,
+                              "--zip-code", stock.zip_code], stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=log, start_new_session=True, cwd=str(script.parent))
+        return True
+    except OSError as exc:
+        LOG.error("Checkout process could not start: %s", exc)
+        return False
+
+
 def check(config: dict[str, Any], *, send: bool = True) -> bool:
     """Run a round. Returns true when Apple responded validly to every configured ZIP."""
     all_items = []
@@ -280,12 +304,15 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
         message = "Apple pickup stock detected near ZIP " + ",".join(config["zip_codes"]) + ":\n" + "\n".join(lines)
         if len(new) > 8:
             message += f"\n...and {len(new) - 8} more matches"
-        message += "\nTap to order the correct 256GB variant. Complete checkout yourself."
+        message += "\nReview Apple immediately. Auto-checkout runs only if armed on your own Mac."
         LOG.warning("NEW STOCK: %s", message.replace("\n", " | "))
         delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
-        if config["open_browser"]:
+        initiated = False
+        if config.get("auto_checkout"):
+            initiated = launch_checkout_bot(top, config)
+        if config["open_browser"] and not initiated:
             open_checkout_page(buy_url)
-        if delivered or config["open_browser"]:
+        if delivered or config["open_browser"] or initiated:
             state["status"] = updated
         else:
             for s in new:
