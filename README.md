@@ -2,6 +2,37 @@
 
 A local, opt-in Apple Store pickup monitor for **one iPhone Duo 256GB** in **Star White** or **Night Sky**. It uses Apple's unofficial read-only pickup status response; it is **not affiliated with Apple**.
 
+## Use your everyday Safari or Chrome (recommended)
+
+If the separate Playwright sign-in window keeps spinning after Apple verification, **stop trying to sign in there**. You can use the Safari or Chrome browser where your Apple Account is already signed in. The monitor opens Apple's matching product page in a new normal browser tab when it sees stock at one of the five approved stores.
+
+In your *local, uncommitted* `.env`, set:
+
+```dotenv
+CHECKOUT_MODE=browser_handoff
+BROWSER_APP=Safari
+OPEN_BROWSER=true
+AUTO_CHECKOUT=false
+```
+
+To use your ordinary Google Chrome instead, set `BROWSER_APP=Google Chrome`. `BROWSER_APP=Default` opens your macOS default browser. If you already cloned the repo, run `git pull` first; `git pull` does **not** replace your local `.env`. A changed `.env.example` also does not automatically update `.env`.
+
+Test a handoff without buying anything:
+
+```bash
+python3 duo_monitor.py prepare-checkout
+```
+
+This opens the Star White 256GB product page in your selected existing browser; you can sign in and verify the product page yourself. It does **not** add to a bag, select pickup, or place an order. To watch new stock:
+
+```bash
+python3 duo_monitor.py watch
+```
+
+**Browser handoff is intentionally manual checkout.** Chrome's main personal profile cannot safely be attached to Playwright's persistent-context automation, and Playwright does not control your installed Safari browser. A manual tab handoff uses your existing session without copying passwords, cookies, verification codes, or card details. The stock check alone does not confirm the exact October 27 pickup appointment; you must check 3:00/4:00 PM in Apple's checkout.
+
+`CHECKOUT_MODE=browser_handoff` ensures the monitor **never starts the automated purchase process**, even if an old local `AUTO_CHECKOUT=true` value remains. Experimental checkout is a separate, explicitly configured mode; it is not recommended when Apple refuses to complete sign-in in a dedicated browser.
+
 ## Exactly five Apple Stores
 
 Only these five stores are accepted by `pickup_rules.py`. Every other store returned by Apple is ignored for stock events, alerts, and checkout.
@@ -46,6 +77,9 @@ ZIP_CODES=01609,01760,02116,02467,02026
 POLL_SECONDS=20
 PREFERRED_COLOR=Star White
 AUTO_CHECKOUT=false
+CHECKOUT_MODE=browser_handoff
+BROWSER_APP=Safari
+OPEN_BROWSER=true
 ```
 
 These ZIP codes are only entry points into Apple's **nearby-store** inventory response. Apple can return extra stores, but our code filters them out. Multiple queries take time and might cause Apple to limit requests. The 20-second interval is **the pause between checks**, not a guaranteed start-to-start frequency or checkout speed. Never use proxy rotation to evade rate limits.
@@ -70,6 +104,10 @@ python3 duo_monitor.py watch
 Alerts include the detected store, color, and Apple product page. Optional Telegram alerts use local `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`; do not share those values. The watcher only runs while the computer is awake and connected. You can install the macOS login agent using `bash scripts/install_macos.sh`, but a closed/sleeping MacBook will not poll.
 
 ## Optional experimental local automated checkout
+
+This separate mode is **not compatible with attaching to your everyday Chrome profile or installed Safari session**. It requires an independent browser session that must already have successfully completed Apple's sign-in flow. If you cannot authenticate within that browser, do not use it. Enabling the experimental mode requires `CHECKOUT_MODE=experimental` AND `AUTO_CHECKOUT=true`; default `browser_handoff` does not purchase.
+
+
 
 **Never enter your Apple password, 2FA code, card number, or authenticated session cookies into GitHub, this chat, or GitHub Actions secrets.** You can sign in to Apple directly inside the isolated browser on your own Mac.
 
