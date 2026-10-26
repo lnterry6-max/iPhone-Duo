@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-from duo_monitor import BUY_URLS, PRODUCTS, fetch_inventory, parse_inventory, InventoryError
+from duo_monitor import BUY_URLS, PRODUCTS, fetch_inventory, parse_inventory, InventoryError, get_config, send_alert
 
 LOG = logging.getLogger("duo_checkout")
 PROFILE = Path.home() / ".duo-stock-scout" / "apple-browser"
@@ -236,6 +236,13 @@ def attempt_page(page, sku: str, store_name: str, zip_code: str, limit: float) -
     return actual
 
 
+def notify_checkout(title: str, message: str, sku: str) -> None:
+    try:
+        send_alert(message, title, BUY_URLS.get(sku, "https://www.apple.com/shop/bag"), get_config())
+    except Exception as exc:
+        LOG.warning("Checkout outcome notification was not delivered: %s", type(exc).__name__)
+
+
 def attempt(args: argparse.Namespace) -> None:
     auth = read_auth()
     validate_auth(auth, args.sku)
@@ -263,9 +270,14 @@ def attempt(args: argparse.Namespace) -> None:
             actual = attempt_page(page, args.sku, s.store, args.zip_code, float(auth["max_total_usd"]))
             print(f"Order submission clicked for {PRODUCTS[args.sku]} at {s.store}; verified total ${actual:.2f}.")
             print("Check Apple account/email for final acceptance. Never retry automatically.")
-        except Exception:
-            print("Checkout did not complete automatically. Browser stays open for you to inspect.", file=sys.stderr)
-            input("Press Enter to close browser after you finish or abandon manually: ")
+            notify_checkout("Duo checkout submitted - VERIFY", f"Submitted Apple order button for {PRODUCTS[args.sku]} at {s.store}, ${actual:.2f}. Verify confirmation in Apple directly; not yet proven accepted.", args.sku)
+        except Exception as exc:
+            print("Automated Apple checkout stopped without a confirmed submission.", file=sys.stderr)
+            notify_checkout("Duo checkout needs attention", f"Apple checkout stopped: {type(exc).__name__}. Inspect the Apple checkout and your email; do not rearm before checking for an order.", args.sku)
+            if sys.stdin.isatty():
+                input("Press Enter to close the Apple browser after inspection: ")
+            else:
+                page.wait_for_timeout(60_000)
             raise
         finally:
             context.close()
