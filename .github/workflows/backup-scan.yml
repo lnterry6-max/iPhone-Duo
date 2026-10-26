@@ -1,0 +1,41 @@
+name: Optional 5-minute cloud backup scan
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: duo-backup-scan
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore prior stock state (best effort)
+        uses: actions/cache/restore@v4
+        with:
+          path: .state/stock.json
+          key: duo-state-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            duo-state-${{ runner.os }}-
+      - name: Check Apple pickup stock
+        env:
+          ZIP_CODES: '01609'
+          POLL_SECONDS: '20'
+          PREFERRED_COLOR: 'Star White'
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python duo_monitor.py once
+      - name: Save stock state (best effort)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .state/stock.json
+          key: duo-state-${{ runner.os }}-${{ github.run_id }}
