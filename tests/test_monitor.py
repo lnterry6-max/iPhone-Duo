@@ -51,7 +51,7 @@ class ProductTests(unittest.TestCase):
 
     def test_missing_sku_is_not_sold_out(self):
         with self.assertRaises(m.InventoryError):
-            m.parse_inventory({"body": {"stores": [{"storeNumber": "R1", "partsAvailability": {}}]}}, "01609")
+            m.parse_inventory({"body": {"stores": [{"storeNumber": "R1", "storeName": "Apple Natick", "partsAvailability": {}}]}}, "01609")
 
     def test_unknown_status_preserves_state(self):
         items = m.parse_inventory(sample("??", "unavailable"), "01609")
