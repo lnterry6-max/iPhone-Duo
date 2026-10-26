@@ -95,7 +95,15 @@ def get_config() -> dict[str, Any]:
     preferred = os.getenv("PREFERRED_COLOR", "Star White").strip()
     if preferred not in ("Star White", "Night Sky"):
         raise ValueError("PREFERRED_COLOR must be Star White or Night Sky")
+    checkout_mode = os.getenv("CHECKOUT_MODE", "browser_handoff").strip().lower()
+    if checkout_mode not in ("browser_handoff", "experimental"):
+        raise ValueError("CHECKOUT_MODE must be browser_handoff or experimental")
+    browser_app = os.getenv("BROWSER_APP", "Safari").strip()
+    if browser_app not in ("Safari", "Google Chrome", "Default"):
+        raise ValueError("BROWSER_APP must be Safari, Google Chrome, or Default")
     return {
+        "checkout_mode": checkout_mode,
+        "browser_app": browser_app,
         "zip_codes": list(dict.fromkeys(zip_codes)),
         "period": period,
         "preferred": preferred,
@@ -105,7 +113,7 @@ def get_config() -> dict[str, Any]:
         "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         "open_browser": os.getenv("OPEN_BROWSER", "false").lower() in ("true", "1", "yes"),
-        "auto_checkout": os.getenv("AUTO_CHECKOUT", "false").lower() in ("true", "1", "yes"),
+        "auto_checkout": checkout_mode == "experimental" and os.getenv("AUTO_CHECKOUT", "false").lower() in ("true", "1", "yes"),
     }
 
 
@@ -255,13 +263,27 @@ def send_alert(message: str, title: str, url: str, config: dict[str, Any]) -> bo
     return successful
 
 
-def open_checkout_page(url: str) -> None:
-    """Open a product page for manual purchase on a Mac; never auto-submit payment."""
-    if sys.platform == "darwin":
-        try:
-            subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as exc:
-            LOG.warning("Unable to open browser: %s", exc)
+def open_checkout_page(url: str, browser_app: str = "Safari") -> bool:
+    """Open URL in user's ordinary browser; never read session data or click checkout."""
+    if urllib.parse.urlparse(url).hostname != "www.apple.com":
+        LOG.error("Refusing browser handoff to a non-Apple URL")
+        return False
+    if browser_app not in ("Safari", "Google Chrome", "Default"):
+        LOG.error("Unrecognized browser selection")
+        return False
+    try:
+        if sys.platform == "darwin":
+            command = ["open"]
+            if browser_app != "Default":
+                command.extend(["-a", browser_app])
+            command.append(url)
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            LOG.info("Opening Apple product page in normal %s browser (manual checkout)", browser_app)
+            return True
+        return webbrowser.open(url)
+    except OSError as exc:
+        LOG.error("Could not open Apple page: %s", exc)
+        return False
 
 
 def launch_checkout_bot(stock: Stock, config: dict[str, Any]) -> bool:
@@ -351,15 +373,16 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
         message = "Apple pickup stock detected near ZIP " + ",".join(config["zip_codes"]) + ":\n" + "\n".join(lines)
         if len(new) > 8:
             message += f"\n...and {len(new) - 8} more matches"
-        message += "\nOct 27 pickup at 3:00 or 4:00 PM only; Apple final summary must verify the slot. Drive time NOT verified. Auto checkout requires local consent."
+        message += "\nCheck that Apple offers Oct 27 pickup at 3:00 or 4:00 PM. Store is on your allowlist; drive time NOT verified."
         LOG.warning("NEW STOCK: %s", message.replace("\n", " | "))
         delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
         initiated = False
-        if config.get("auto_checkout"):
+        if config.get("checkout_mode") == "experimental" and config.get("auto_checkout"):
             initiated = launch_checkout_bot(top, config)
+        opened = False
         if config["open_browser"] and not initiated:
-            open_checkout_page(buy_url)
-        if delivered or config["open_browser"] or initiated:
+            opened = open_checkout_page(buy_url, config.get("browser_app", "Safari"))
+        if delivered or opened or initiated:
             state["status"] = updated
         else:
             for s in new:
@@ -386,9 +409,9 @@ def main() -> int:
     try:
         config = get_config()
         if args.command == "prepare-checkout":
-            LOG.info("Opening Apple Store in your default browser. Sign in directly with Apple yourself.")
-            LOG.info("Never enter Apple passwords, verification codes or payment information in this app or GitHub.")
-            return 0 if webbrowser.open(BUY_URLS["MK1E4LL/A"]) else 1
+            LOG.info("Opening Apple Store in your normal %s browser.", config["browser_app"])
+            LOG.info("Finish all authentication and checkout directly in your browser; nothing is autofilled or purchased by this command.")
+            return 0 if open_checkout_page(BUY_URLS["MK1E4LL/A"], config["browser_app"]) else 1
         if args.command == "test-alert":
             good = send_alert("This is a test alert, NOT actual inventory. Checkout is always manual.",
                               "Duo monitor test", BUY_URLS["MK1E4LL/A"], config)
