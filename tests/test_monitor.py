@@ -20,6 +20,47 @@ def sample(white="unavailable", black="unavailable"):
 
 
 class ProductTests(unittest.TestCase):
+    def test_default_handoff_blocks_experimental_checkout_even_if_env_says_true(self):
+        with patch.dict("os.environ", {"AUTO_CHECKOUT": "true", "CHECKOUT_MODE": "browser_handoff",
+                                        "BROWSER_APP": "Safari", "POLL_SECONDS": "20",
+                                        "ZIP_CODES": "01609"}):
+            config = m.get_config()
+            self.assertFalse(config["auto_checkout"])
+            self.assertEqual(config["browser_app"], "Safari")
+
+    def test_handoff_to_personal_safari_uses_open_a_and_no_checkout(self):
+        with patch.object(m.sys, "platform", "darwin"), patch.object(m.subprocess, "Popen") as popen:
+            self.assertTrue(m.open_checkout_page(m.BUY_URLS["MK1F4LL/A"], "Safari"))
+            self.assertEqual(popen.call_args.args[0][:3], ["open", "-a", "Safari"])
+
+    def test_handoff_to_personal_chrome(self):
+        with patch.object(m.sys, "platform", "darwin"), patch.object(m.subprocess, "Popen") as popen:
+            self.assertTrue(m.open_checkout_page(m.BUY_URLS["MK1E4LL/A"], "Google Chrome"))
+            self.assertEqual(popen.call_args.args[0][:3], ["open", "-a", "Google Chrome"])
+
+    def test_never_handoff_to_non_apple_url(self):
+        with patch.object(m.subprocess, "Popen") as popen:
+            self.assertFalse(m.open_checkout_page("https://example.com/checkout"))
+            popen.assert_not_called()
+
+    def test_manual_handoff_does_not_launch_checkout_automation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = {"zip_codes": ["01609"], "period": 20, "preferred": "Star White",
+                      "state_path": Path(temp) / "stock.json", "ntfy_topic": "",
+                      "ntfy_server": "https://ntfy.sh", "telegram_token": "",
+                      "telegram_chat_id": "", "open_browser": True,
+                      "browser_app": "Safari", "checkout_mode": "browser_handoff",
+                      "auto_checkout": True}
+            with patch.object(m, "PURCHASE_LOCK", Path(temp) / "no-purchase-lock.json"), \
+                 patch.object(m, "fetch_inventory", return_value=sample("available")), \
+                 patch.object(m, "send_alert", return_value=False), \
+                 patch.object(m, "eligible_pickup_hours", return_value={15: True}), \
+                 patch.object(m, "launch_checkout_bot") as checkout, \
+                 patch.object(m, "open_checkout_page", return_value=True) as handoff:
+                self.assertTrue(m.check(config))
+                checkout.assert_not_called()
+                handoff.assert_called_once()
+
     def test_only_256gb_skus(self):
         self.assertEqual(set(m.PRODUCTS), {"MK1E4LL/A", "MK1F4LL/A"})
         self.assertIn("parts.0=MK1E4LL%2FA", m.stock_url("01609"))
