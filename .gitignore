@@ -8,3 +8,4 @@ __pycache__/
 .playwright/
 .apple-browser/
 checkout-authorization.json
+.venv/
