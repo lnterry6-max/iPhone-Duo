@@ -99,12 +99,12 @@ def route_duration_minutes(destination: str, departure: datetime, origin: str | 
         raise PickupConstraintError(f"Driving-time verification failed: {type(exc).__name__}") from exc
 
 
-def eligible_pickup_hours(store: str) -> dict[int, float]:
+def eligible_pickup_hours(store: str, *, now: datetime | None = None) -> dict[int, float]:
     """Returns only pickup hours reachable in <60m with a safety margin; otherwise fails closed."""
     canonical = canonical_store(store)
     if canonical is None:
         raise PickupConstraintError("Store not in the approved five-store list")
-    now = datetime.now(BOSTON)
+    now = now or datetime.now(BOSTON)
     if now.date() > PICKUP_DATE:
         raise PickupConstraintError("October 27 pickup window has expired")
     valid = {}
