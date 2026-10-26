@@ -71,7 +71,7 @@ Edit `.env`:
 | `PREFERRED_COLOR` | `Star White` | If multiple newly in-stock matches appear together, determine which product URL the primary alert opens. Both colors are still monitored. |
 | `NTFY_TOPIC` | empty | ntfy notification topic subscribed to on your phone. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | empty | Optional additional push channel. |
-| `OPEN_BROWSER` | `false` | If `true` on a Mac, opens the Apple product page on first availability. **Does not check out.** |
+| `OPEN_BROWSER` | `true` in the example configuration | If `true` on a Mac, opens the Apple product page on first availability. **Does not check out.** |
 | `STATE_PATH` | `.state/stock.json` | Local deduplication state. Excluded from Git. |
 
 The monitor checks Apple Store pickup only. It does not check in-store inventory at T-Mobile, Best Buy or carrier checkout, and it does not buy shipping inventory. For exact store radius filters or carrier-specific payment plans, additional retailer integrations would be necessary. The Apple response determines which stores are geographically near the requested ZIP; **the monitor does not enforce an exact mileage radius**.
