@@ -22,24 +22,24 @@ class AuthorizationTests(unittest.TestCase):
 
 class SummaryTests(unittest.TestCase):
     def test_exact_model_color_and_pickup(self):
-        summary = 'Order Summary | iPhone Duo 256GB Star White | Qty: 1 | Pick up at Apple Natick | Order Total: $2,125.45'
+        summary = 'Order Summary | iPhone Duo 256GB Star White | Qty: 1 | Pick up at Apple Natick Tuesday, October 27, 2026 at 3:00 PM | Order Total: $2,125.45'
         self.assertAlmostEqual(summary_ok(summary, 'MK1E4LL/A', 'Natick', 2200), 2125.45)
 
     def test_refuse_wrong_color(self):
         with self.assertRaises(CheckoutError):
-            summary_ok('iPhone Duo 256GB Night Sky Qty: 1 Pick up Natick Total $2100.00', 'MK1E4LL/A','Natick',2200)
+            summary_ok('iPhone Duo 256GB Night Sky Qty: 1 Pick up Natick Tuesday, October 27, 2026 at 3:00 PM Total $2100.00', 'MK1E4LL/A','Natick',2200)
 
     def test_refuse_over_cap(self):
         with self.assertRaises(CheckoutError):
-            summary_ok('iPhone Duo 256GB Star White Qty: 1 Pick up Natick Total $2300.00', 'MK1E4LL/A','Natick',2200)
+            summary_ok('iPhone Duo 256GB Star White Qty: 1 Pick up Natick Tuesday, October 27, 2026 at 3:00 PM Total $2300.00', 'MK1E4LL/A','Natick',2200)
 
     def test_refuse_no_qty(self):
         with self.assertRaises(CheckoutError):
-            summary_ok('iPhone Duo 256GB Star White Pick up Natick Total $2100.00', 'MK1E4LL/A','Natick',2200)
+            summary_ok('iPhone Duo 256GB Star White Pick up Natick Tuesday, October 27, 2026 at 3:00 PM Total $2100.00', 'MK1E4LL/A','Natick',2200)
 
     def test_refuse_other_capacity(self):
         with self.assertRaises(CheckoutError):
-            summary_ok('iPhone Duo 256GB Star White 512GB Qty 1 Pick up Natick Total $2100.00', 'MK1E4LL/A','Natick',2200)
+            summary_ok('iPhone Duo 256GB Star White 512GB Qty 1 Pick up Natick Tuesday, October 27, 2026 at 3:00 PM Total $2100.00', 'MK1E4LL/A','Natick',2200)
 
 if __name__ == '__main__':
     unittest.main()
