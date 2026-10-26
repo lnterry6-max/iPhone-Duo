@@ -22,7 +22,8 @@ from duo_monitor import BUY_URLS, PRODUCTS, fetch_inventory, parse_inventory, In
 from pickup_rules import assert_pickup_slot, canonical_store, eligible_pickup_hours, PickupConstraintError
 
 LOG = logging.getLogger("duo_checkout")
-PROFILE = Path.home() / ".duo-stock-scout" / "apple-browser"
+PROFILE_ROOT = Path.home() / ".duo-stock-scout"
+LOGIN_CONFIRMATION = PROFILE_ROOT / "login-confirmed.json"
 AUTH = Path.home() / ".duo-stock-scout" / "authorization.json"
 LOCK = Path.home() / ".duo-stock-scout" / "checkout.lock"
 PURCHASE_LOCK = Path.home() / ".duo-stock-scout" / "purchase-lock.json"
@@ -73,7 +74,33 @@ def validate_auth(auth: dict, sku: str, now: float | None = None) -> None:
         raise CheckoutError("Automatic order submission is not armed")
 
 
+def checkout_browser() -> str:
+    """Playwright channel to use in a separate, local browser profile."""
+    choice = os.getenv("CHECKOUT_BROWSER", "chrome").strip().lower()
+    if choice not in ("chrome", "chromium"):
+        raise CheckoutError("CHECKOUT_BROWSER must be chrome or chromium")
+    return choice
+
+
+def browser_profile() -> Path:
+    """Never use an existing personal Chrome profile or Safari cookies."""
+    return PROFILE_ROOT / ("apple-browser-chrome" if checkout_browser() == "chrome" else "apple-browser-chromium")
+
+
+def require_verified_login() -> None:
+    """Manual UI confirmation; NOT an assertion that Apple will accept checkout."""
+    try:
+        confirmed = json.loads(LOGIN_CONFIRMATION.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CheckoutError("No locally verified Apple session. Run checkout_bot.py login and confirm the account page loads.") from exc
+    if confirmed.get("browser") != checkout_browser():
+        raise CheckoutError("The verified login belongs to a different browser. Run checkout_bot.py login again.")
+    if time.time() - float(confirmed.get("verified_at", 0)) > 86400:
+        raise CheckoutError("Local login check is older than 24 hours; verify Apple sign-in again.")
+    
+
 def arm(args: argparse.Namespace) -> None:
+    require_verified_login()
     if PURCHASE_LOCK.exists():
         raise CheckoutError("A checkout was already attempted. Check Apple orders first; the purchase lock must be explicitly reset.")
     if not (1999 <= args.max_total <= 3000):
@@ -109,25 +136,52 @@ def ensure_apple(url: str) -> None:
 
 
 def browser_context(playwright):
-    secure_directory(PROFILE)
-    return playwright.chromium.launch_persistent_context(
-        user_data_dir=str(PROFILE), headless=False, accept_downloads=False,
-        viewport={"width": 1150, "height": 850},
-    )
+    profile = browser_profile()
+    secure_directory(profile)
+    choice = checkout_browser()
+    options = {
+        "user_data_dir": str(profile),
+        "headless": False,
+        "accept_downloads": False,
+        "viewport": {"width": 1150, "height": 850},
+    }
+    # Use the installed regular Google Chrome rather than the bundled Chrome for Testing.
+    # This is normal supported Playwright functionality, not an attempt to evade site security.
+    if choice == "chrome":
+        options["channel"] = "chrome"
+    try:
+        return playwright.chromium.launch_persistent_context(**options)
+    except Exception as exc:
+        raise CheckoutError(
+            "Cannot open the selected browser. For CHECKOUT_BROWSER=chrome, install regular "
+            "Google Chrome; otherwise select chromium locally. Browser error: " + type(exc).__name__
+        ) from exc
 
 
 def login() -> None:
-    print("Sign in ONLY on apple.com within the opened browser window.")
-    print("Apple handles your password, passkey, and 2FA; this script never asks for them.")
-    print("Set your preferred pickup/payment details in Apple, and ensure your bag is empty.")
+    # A spinning Apple sign-in screen must never be treated as a saved login.
+    LOGIN_CONFIRMATION.unlink(missing_ok=True)
+    print(f"Opening a dedicated local {checkout_browser()} profile (not your personal Safari/Chrome cookies).")
+    print("Sign in ONLY on Apple's official site in the opened window; complete any verification yourself.")
+    print("If Apple shows an endless spinner or sends you back to sign-in, do NOT confirm.")
     sync_playwright, _ = get_playwright()
+    response = ""
     with sync_playwright() as p:
         context = browser_context(p)
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto("https://www.apple.com/shop/account/home", wait_until="domcontentloaded", timeout=30000)
-        input("After signing in and checking your bag, return here and press Enter to close: ")
-        context.close()
-    print("Browser session saved locally in your home directory. Keep it private.")
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto("https://www.apple.com/shop/account/home", wait_until="domcontentloaded", timeout=30000)
+            print("Check the Apple Store Account page, not just the sign-in prompt.")
+            response = input(
+                "ONLY if your account details are visible on Apple's Store Account page, "
+                "type VERIFIED; otherwise press Enter to cancel: "
+            ).strip()
+        finally:
+            context.close()
+    if response != "VERIFIED":
+        raise CheckoutError("Login not verified; unattended checkout stays disarmed.")
+    atomic_json(LOGIN_CONFIRMATION, {"browser": checkout_browser(), "verified_at": time.time()})
+    print("You confirmed the account page loaded. Session remains LOCAL and may still expire.")
 
 
 def verify_stock(sku: str, store_id: str, zip_code: str):
@@ -254,6 +308,7 @@ def notify_checkout(title: str, message: str, sku: str) -> None:
 
 
 def attempt(args: argparse.Namespace) -> None:
+    require_verified_login()
     auth = read_auth()
     validate_auth(auth, args.sku)
     if PURCHASE_LOCK.exists():
