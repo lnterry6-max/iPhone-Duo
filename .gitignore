@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 .DS_Store
 *.log
+.playwright/
+.apple-browser/
+checkout-authorization.json
