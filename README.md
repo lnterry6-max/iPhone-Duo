@@ -199,6 +199,23 @@ python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip
 
 Keep `AUTO_CHECKOUT=false`, and do not arm the purchase bot. If it stops again, share only the final `Stopped at ... / ... : ...` line; do not share Apple session tokens, private page snapshots, or payment information. The test may manipulate the phone configuration or bag but will **not** press Place Order.
 
+## October 26, 9:53 PM — no-AppleCare label selection update
+
+After the Chrome verifier became readable, the live dry run stopped at `applecare / care_wait_for_render / no_applecare_option_missing`, even though a prior read-only inspection showed **No AppleCare coverage** as an input and label. Two issues were addressed:
+
+- The Chrome checkout launcher already opens the approved 256GB URL. The script now **skips a redundant second navigation** when already on that exact approved URL, avoiding a needless React configurator reset.
+- The AppleCare selection now reads visible DOM `label` text *inside Chrome*, matches only **No AppleCare coverage**, identifies its linked `radio` or `checkbox`, clicks the label via Playwright, and checks that the linked input really becomes selected. Unlinked, ambiguous, unreadable, or absent options stop safely. It never guesses a paid AppleCare plan. The selection wait is bounded and may last around 25 seconds during page loading.
+
+To retry safely after checking your Apple bag for earlier test items:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
+```
+
+This command is **review-only and never presses Apple's final order submission button**. Keep `CHECKOUT_MODE=chrome_extension` and `AUTO_CHECKOUT=false`. Passing offline tests does not demonstrate that Apple will accept an automated transaction, bypass verification, or meet a 30-second purchase target.
+
 ## Troubleshoot a missing No AppleCare+ option (read-only)
 
 If `dry-run-chrome` stops with `Stopped at applecare: no_applecare_option_missing`, the page did **not** expose the exact selection label the automation expected. That does **not** mean AppleCare is compulsory; the option may be worded differently or presented later.
