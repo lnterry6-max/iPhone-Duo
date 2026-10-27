@@ -15,6 +15,7 @@ function makeLabel(name,{checked=false,linked=true,extra='',childTitle=false}={}
   return {
     innerText:extra ? name+' '+extra : name,
     control,
+    querySelector(){return null;},
     htmlFor: '',
     getClientRects(){return [1];},
     querySelectorAll(selector){
