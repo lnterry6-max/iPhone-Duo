@@ -467,9 +467,47 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     return not errors
 
 
+def doctor(config: dict[str, Any]) -> bool:
+    """Read-only readiness check. Does not contact Apple's rate-limited inventory API."""
+    LOG.info("Allowed stores: Blackstone Valley, Natick, Boylston Street, Chestnut Hill, Legacy Place")
+    LOG.info("Allowed device configuration: one 256GB Duo, Star White or Night Sky")
+    LOG.info("Configured polling: %.0fs (effective watch minimum: 120s)", config["period"])
+    LOG.info("Browser mode: %s; automatic purchase setting: %s",
+             config["checkout_mode"], "on" if config["auto_checkout"] else "off")
+    reason = purchase_lock_reason()
+    if reason:
+        LOG.warning("Purchase lock: %s", reason)
+        return False
+    if config["checkout_mode"] not in ("chrome_extension", "chrome_auto"):
+        LOG.info("Chrome extension readiness not needed in this mode")
+        return True
+    if sys.platform != "darwin" or os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+        LOG.warning("Connected Chrome requires your local Mac; unavailable here")
+        return False
+    binary = Path.home() / ".local" / "bin" / "playwright-cli"
+    if not binary.is_file():
+        LOG.warning("Playwright CLI missing; see README for local setup")
+        return False
+    try:
+        result = subprocess.run(
+            [str(binary), "-s=chrome", "tab-list"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=12, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        LOG.warning("Chrome session readiness check failed; reattach manually")
+        return False
+    if result.returncode != 0:
+        LOG.warning("Normal Chrome session not attached; reconnect with Playwright Extension")
+        return False
+    LOG.info("Normal Chrome extension session: connected")
+    LOG.warning("This checks Chrome only; Apple stock access and live checkout remain unverified")
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Monitor iPhone Duo 256GB pickup availability near ZIP 01609")
-    parser.add_argument("command", nargs="?", choices=["watch", "once", "test-alert", "prepare-checkout", "mark-purchased"], default="once")
+    parser.add_argument("command", nargs="?", choices=["watch", "once", "test-alert", "prepare-checkout", "mark-purchased", "doctor"], default="once")
     parser.add_argument("--env", default=".env", help="Read local .env file (never commit secrets)")
     parser.add_argument("--no-notify", action="store_true", help="Do stock lookup without sending notifications")
     args = parser.parse_args()
@@ -480,6 +518,8 @@ def main() -> int:
             mark_purchased()
             return 0
         config = get_config()
+        if args.command == "doctor":
+            return 0 if doctor(config) else 2
         if args.command == "prepare-checkout":
             LOG.info("Opening Apple Store for safe browser handoff (mode %s).", config["checkout_mode"])
             LOG.info("No order is placed; use Apple checkout directly in your browser.")
