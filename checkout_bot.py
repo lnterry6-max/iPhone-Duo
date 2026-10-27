@@ -13,6 +13,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -99,8 +100,37 @@ def require_verified_login() -> None:
         raise CheckoutError("Local login check is older than 24 hours; verify Apple sign-in again.")
     
 
+def chrome_cli() -> Path:
+    """Official Playwright CLI already installed by the user locally."""
+    return Path.home() / ".local" / "bin" / "playwright-cli"
+
+
+def connected_chrome_ready() -> bool:
+    """Check the existing attached Chrome; never connect remotely or export cookies."""
+    if sys.platform != "darwin" or os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+        return False
+    binary = chrome_cli()
+    if not binary.is_file():
+        return False
+    try:
+        result = subprocess.run([str(binary), "-s=chrome", "tab-list"],
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                timeout=12, check=False)
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 def arm(args: argparse.Namespace) -> None:
-    require_verified_login()
+    mode = get_config()["checkout_mode"]
+    if mode == "chrome_auto":
+        if not connected_chrome_ready():
+            raise CheckoutError("Chrome isn't connected. Open normal Chrome and run playwright-cli attach --extension=chrome.")
+    elif mode == "experimental":
+        require_verified_login()
+    else:
+        raise CheckoutError("Your monitor is in manual checkout mode. Automatic purchases are not armed.")
     if PURCHASE_LOCK.exists():
         raise CheckoutError("A checkout was already attempted. Check Apple orders first; the purchase lock must be explicitly reset.")
     if not (1999 <= args.max_total <= 3000):
@@ -108,6 +138,7 @@ def arm(args: argparse.Namespace) -> None:
     if not (0 < args.hours <= 24):
         raise CheckoutError("Authorization expires within 24 hours")
     print("This authorizes ONE real Apple order for a 256GB iPhone Duo.")
+    print(f"Browser checkout mode: {mode}.")
     print("Allowed colors: Star White or Night Sky; allowed quantity: one.")
     print(f"Maximum total price including tax: ${args.max_total:.2f}.")
     print("If Apple changes the page or requests verification, checkout will stop.")
@@ -116,7 +147,8 @@ def arm(args: argparse.Namespace) -> None:
     atomic_json(AUTH, {
         "status": "armed", "expires_at": time.time() + 3600 * args.hours,
         "max_total_usd": args.max_total, "quantity": 1,
-        "allow_submit": True, "armed_at": datetime.now(timezone.utc).isoformat(),
+        "allow_submit": True, "checkout_mode": mode,
+        "armed_at": datetime.now(timezone.utc).isoformat(),
     })
     print(f"Armed for {args.hours:g} hours. Remove authorization with 'python3 checkout_bot.py disarm'.")
 
@@ -307,6 +339,150 @@ def notify_checkout(title: str, message: str, sku: str) -> None:
         LOG.warning("Checkout outcome notification was not delivered: %s", type(exc).__name__)
 
 
+def chrome_checkout_flow(stock, max_total: float, allowed_hours: list[int],
+                         *, submit_order: bool) -> dict:
+    """Execute a strict local CLI script in existing Chrome; NEVER print browser data."""
+    if not connected_chrome_ready():
+        raise CheckoutError("Connected Chrome session is unavailable; automation aborted.")
+    canonical = canonical_store(stock.store)
+    if canonical is None or stock.sku not in ALLOWED_SKUS:
+        raise CheckoutError("SKU or store outside the authorized five-store/256GB allowlist")
+    if not allowed_hours or any(h not in (15, 16) for h in allowed_hours):
+        raise CheckoutError("No allowed future October 27 pickup hours remain")
+    url = BUY_URLS[stock.sku]
+    config = {
+        "sku": stock.sku, "store": canonical, "zip": stock.zip_code,
+        "url": url, "quantity": 1, "max_total_usd": float(max_total),
+        "valid_hours": list(sorted(set(allowed_hours))), "submit_order": bool(submit_order),
+    }
+    template = Path(__file__).with_name("chrome_checkout_flow.js").read_text(encoding="utf-8")
+    if template.count("__DUO_CONFIG_JSON__") != 1:
+        raise CheckoutError("Chrome purchase template was modified unexpectedly")
+    secure_directory(PROFILE_ROOT)
+    script = PROFILE_ROOT / f"chrome-flow-{os.getpid()}.js"
+    data = template.replace("__DUO_CONFIG_JSON__", json.dumps(config, ensure_ascii=True))
+    binary = str(chrome_cli())
+    try:
+        with script.open("x", encoding="utf-8") as file:
+            os.chmod(script, 0o600)
+            file.write(data)
+        # The CLI already has the user's signed-in Chrome extension connection.
+        # tab-new only navigates the selected 256GB product; never logs in.
+        navigate = subprocess.run(
+            [binary, "-s=chrome", "tab-new", url],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, timeout=25, check=False,
+        )
+        if navigate.returncode != 0:
+            raise CheckoutError("Could not open approved product in connected Chrome")
+        result = subprocess.run(
+            [binary, "-s=chrome", "--raw", "run-code", f"--filename={script}"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, timeout=100, check=False,
+        )
+        # CLI may print page-related details on error; NEVER log raw CLI output.
+        if result.returncode != 0:
+            raise CheckoutError("Chrome checkout scripting could not finish safely")
+        match = re.search(r"DUO_AUTOMATION_RESULT=(\\{[^\\n\\r]*?\\})", result.stdout)
+        if not match:
+            raise CheckoutError("Chrome checkout returned no verified machine-readable outcome")
+        try:
+            answer = json.loads(match.group(1))
+        except ValueError as exc:
+            raise CheckoutError("Chrome checkout result could not be verified") from exc
+        if answer.get("status") not in ("stopped", "review_verified", "submitted_unverified"):
+            raise CheckoutError("Chrome checkout result was unexpected")
+        return answer
+    except subprocess.TimeoutExpired as exc:
+        raise CheckoutError("Chrome checkout timed out; order outcome is uncertain") from exc
+    finally:
+        script.unlink(missing_ok=True)
+
+
+def attempt_chrome(args: argparse.Namespace) -> None:
+    """Explicitly armed one-shot order attempt using the existing Chrome extension."""
+    if get_config()["checkout_mode"] != "chrome_auto":
+        raise CheckoutError("Set CHECKOUT_MODE=chrome_auto locally for this explicit opt-in")
+    auth = read_auth()
+    validate_auth(auth, args.sku)
+    if auth.get("checkout_mode") != "chrome_auto":
+        raise CheckoutError("Checkout authorization was created for another browser mode")
+    if PURCHASE_LOCK.exists():
+        raise CheckoutError("A prior order attempt is already locked; NEVER retry blindly")
+    if not args.store_id or not args.store_name:
+        raise CheckoutError("Specific Apple Store identity required")
+    # All nonpayment prerequisites are checked BEFORE creating the durable lock.
+    stock = verify_stock(args.sku, args.store_id, args.zip_code)
+    if stock.store.casefold() != args.store_name.casefold():
+        raise CheckoutError("Apple Store identity changed")
+    hours = sorted(eligible_pickup_hours(stock.store))
+    if not connected_chrome_ready():
+        raise CheckoutError("Your signed-in Chrome session disconnected")
+    secure_directory(LOCK.parent)
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Acquire exclusive lock, re-read auth and purchase state to avoid races.
+        validate_auth(read_auth(), args.sku)
+        if PURCHASE_LOCK.exists():
+            raise CheckoutError("Purchase already locked by another attempt")
+        atomic_json(PURCHASE_LOCK, {
+            "status": "checkout_started", "sku": args.sku,
+            "store_id": args.store_id,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+        auth["status"] = "attempted"
+        auth["attempted_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_json(AUTH, auth)
+        try:
+            result = chrome_checkout_flow(stock, float(auth["max_total_usd"]), hours, submit_order=True)
+            if result["status"] == "submitted_unverified":
+                status = "submitted_unverified"
+                msg = "One order button click attempted; check your Apple Orders and email immediately."
+            else:
+                status = "stopped_before_confirmation"
+                msg = "Checkout stopped; verify Apple Orders before considering any reset."
+            atomic_json(PURCHASE_LOCK, {
+                "status": status, "sku": args.sku, "store_id": args.store_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            LOG.warning("%s; purchase lock remains set.", msg)
+            notify_checkout("Duo checkout halted - verify", msg, args.sku)
+        except Exception as exc:
+            LOG.error("Automated Chrome checkout stopped (%s). Purchase lock remains.", type(exc).__name__)
+            notify_checkout("Duo checkout needs attention",
+                "Chrome checkout stopped or timed out. Verify Apple's order page and email before any reset.",
+                args.sku)
+            raise
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def dry_run_chrome(args: argparse.Namespace) -> None:
+    """Safe functional test: may add to bag, never clicks Apple's final order button."""
+    if not connected_chrome_ready():
+        raise CheckoutError("Chrome extension is not attached")
+    if args.sku not in ALLOWED_SKUS:
+        raise CheckoutError("Not an allowed iPhone Duo SKU")
+    from duo_monitor import Stock
+    from pickup_rules import canonical_store
+    canonical = canonical_store(args.store_name)
+    if canonical is None:
+        raise CheckoutError("Store is not on the approved list")
+    hours = sorted(eligible_pickup_hours(canonical))
+    stock = Stock(canonical, "LOCAL-TEST", args.sku, PRODUCTS[args.sku], "unknown", args.zip_code)
+    result = chrome_checkout_flow(stock, args.max_total, hours, submit_order=False)
+    LOG.info("Review-only Chrome test result: %s (no purchase submitted)", result.get("status"))
+    if result.get("status") == "stopped":
+        LOG.warning("Stopped at %s: %s. Inspect Chrome manually; do not enable auto until the flow is understood.",
+                    result.get("stage"), result.get("code"))
+    elif result.get("status") == "review_verified":
+        LOG.info("Apple review summary matched restrictions; final order NOT clicked.")
+    else:
+        raise CheckoutError("Unexpected dry-run state")
+
+
 def attempt(args: argparse.Namespace) -> None:
     require_verified_login()
     auth = read_auth()
@@ -380,10 +556,20 @@ def main() -> int:
     commands.add_parser("disarm", help="Revoke purchase authorization")
     commands.add_parser("reset-purchase-lock", help="Manually unlock only after checking Apple orders")
     t = commands.add_parser("attempt", help="Triggered by the local stock monitor only")
+    ca = commands.add_parser("attempt-chrome", help="One-shot live Chrome extension checkout; requires arm")
+    d = commands.add_parser("dry-run-chrome", help="Test Chrome checkout to final review without payment")
+    d.add_argument("--sku", choices=list(PRODUCTS), required=True)
+    d.add_argument("--store-name", required=True)
+    d.add_argument("--zip-code", default="01609")
+    d.add_argument("--max-total", type=float, default=2200)
     t.add_argument("--sku", choices=list(PRODUCTS), required=True)
     t.add_argument("--store-id", required=True)
     t.add_argument("--store-name", required=True)
     t.add_argument("--zip-code", default="01609")
+    ca.add_argument("--sku", choices=list(PRODUCTS), required=True)
+    ca.add_argument("--store-id", required=True)
+    ca.add_argument("--store-name", required=True)
+    ca.add_argument("--zip-code", default="01609")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     load_env(Path(".env"))
@@ -403,6 +589,10 @@ def main() -> int:
             PURCHASE_LOCK.unlink(missing_ok=True)
             AUTH.unlink(missing_ok=True)
             print("Local purchase lock reset; still disarmed. Re-authorization required.")
+        elif args.command == "attempt-chrome":
+            attempt_chrome(args)
+        elif args.command == "dry-run-chrome":
+            dry_run_chrome(args)
         else:
             attempt(args)
     except (CheckoutError, PickupConstraintError, OSError, ValueError) as exc:
