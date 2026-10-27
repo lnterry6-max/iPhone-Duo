@@ -233,6 +233,22 @@ The inspector never clicks anything, makes an order, reads cookies, or exports a
 
 Do not share private session information or the full Playwright snapshot. If the controls report different wording, the selector can be adjusted based on those observed labels. A purchase flow must still reject any additional protection plans and check the final order total. Existing Apple checkout automation has **not** been proven safe for unattended payment and must remain disabled until manually tested.
 
+## Resume the existing Apple bag without adding another phone
+
+**October 26 evening:** The real Chrome dry run reached `https://www.apple.com/shop/bag`, showing **one iPhone Duo 256GB Star White** and a displayed bag total of **$2,123.94**. The checkout code then stopped with `bag_checkout_ambiguous` because Apple's bag may have more than one identical **Check Out** control. The standard Checkout selector now chooses the first enabled exact-match button (or matching link) and **never** matches `Check out with Apple Pay`.
+
+**Important:** Because a phone is already in the bag, do NOT rerun `dry-run-chrome` until you have removed previous test products; that command starts from the product page and can add another unit. Instead use this newly supported nonpaying **bag-only resume**:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 checkout_bot.py dry-run-bag --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
+```
+
+This opens the **existing bag** in attached Chrome, confirms the Star White 256GB item text is present, selects only a standard Checkout control, and attempts to navigate store/pickup choices. It **does not** click Place Order, cannot charge, and **does not add another phone**. It refuses `resume_bag` if payment submission is enabled. Before running, visually ensure the bag contains **exactly one phone** with no unwanted extras. A later order-review check must independently verify device, quantity, store, appointment, no AppleCare, and the authorized price ceiling.
+
+The screenshot showed **pickup unavailable at Blackstone Valley** at the time, but that does not confirm status for Natick or other allowed stores. Avoid assuming that a bag item reserves store inventory or that the requested next-day appointment will be offered. Continue to keep `AUTO_CHECKOUT=false` until checkout has been safely verified in the real Apple Store.
+
 ## Exactly five Apple Stores
 
 Only these five stores are accepted by `pickup_rules.py`. Every other store returned by Apple is ignored for stock events, alerts, and checkout.
