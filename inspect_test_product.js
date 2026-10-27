@@ -44,7 +44,11 @@ async page => {
             if(!p.getClientRects().length)break;
             const nearby=norm(p.innerText);
             if(nearby.length>240)break;
-            const no=negative.test(nearby), yes=positive.test(nearby);
+            const no=negative.test(nearby);
+            // "not available for pickup" contains the positive phrase as a
+            // substring. Remove the negative phrase before checking for a
+            // separately stated positive signal.
+            const yes=positive.test(nearby.replace(negative,' '));
             if(no!==yes) {
               const next=no?'unavailable':'available';
               const old=storeAvailability.get(store);
