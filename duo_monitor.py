@@ -453,7 +453,8 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     # genuinely NEW eligible 256GB Duo, do not wait for four further lookups
     # before beginning the stock alert/Chrome handoff. Do not send extra
     # requests, shorten the rate-limit interval, or bypass Apple's challenge.
-    previous_status = read_state(config["state_path"])["status"] if send else {}
+    state = read_state(config["state_path"]) if send else None
+    previous_status = state["status"] if state is not None else {}
     for zip_code in config["zip_codes"]:
         try:
             items = parse_inventory(fetch_inventory(zip_code), zip_code)
@@ -492,7 +493,6 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     # Read-only lookups should not consume an alert by recording a new in-stock state.
     if not send:
         return not errors
-    state = {"status": previous_status}
     new, updated = compute_new_stock(all_items, state["status"])
     # If notifications fail, do not forget the new matches; retry on next poll.
     if new:
