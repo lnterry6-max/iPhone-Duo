@@ -339,6 +339,41 @@ def notify_checkout(title: str, message: str, sku: str) -> None:
         LOG.warning("Checkout outcome notification was not delivered: %s", type(exc).__name__)
 
 
+def parse_chrome_cli_result(output: str) -> dict:
+    """Read only our prefixed, structured CLI result; never print raw page data.
+
+    Depending on CLI version, --raw may still JSON-quote a returned JS string.
+    Decode that outer string first, then strictly parse one result dictionary.
+    """
+    value = output.strip()
+    if not value or len(value) > 200000:
+        raise CheckoutError("Chrome checkout returned an empty or oversized result")
+    try:
+        decoded = json.loads(value)
+        if isinstance(decoded, str):
+            value = decoded
+    except (ValueError, TypeError):
+        pass
+    marker = "DUO_AUTOMATION_RESULT="
+    position = value.rfind(marker)
+    if position < 0:
+        raise CheckoutError("Chrome checkout returned no verified machine-readable outcome")
+    fragment = value[position + len(marker):].lstrip()
+    try:
+        answer, _ = json.JSONDecoder().raw_decode(fragment)
+    except ValueError as exc:
+        raise CheckoutError("Chrome checkout result could not be verified") from exc
+    if not isinstance(answer, dict) or answer.get("status") not in (
+        "stopped", "review_verified", "submitted_unverified"
+    ):
+        raise CheckoutError("Chrome checkout result was unexpected")
+    return {
+        key: answer[key]
+        for key in ("status", "stage", "code", "clickedOrderButton", "total_usd")
+        if key in answer
+    }
+
+
 def chrome_checkout_flow(stock, max_total: float, allowed_hours: list[int],
                          *, submit_order: bool) -> dict:
     """Execute a strict local CLI script in existing Chrome; NEVER print browser data."""
@@ -383,16 +418,7 @@ def chrome_checkout_flow(stock, max_total: float, allowed_hours: list[int],
         # CLI may print page-related details on error; NEVER log raw CLI output.
         if result.returncode != 0:
             raise CheckoutError("Chrome checkout scripting could not finish safely")
-        match = re.search(r"DUO_AUTOMATION_RESULT=(\{[^\n\r]*?\})", result.stdout)
-        if not match:
-            raise CheckoutError("Chrome checkout returned no verified machine-readable outcome")
-        try:
-            answer = json.loads(match.group(1))
-        except ValueError as exc:
-            raise CheckoutError("Chrome checkout result could not be verified") from exc
-        if answer.get("status") not in ("stopped", "review_verified", "submitted_unverified"):
-            raise CheckoutError("Chrome checkout result was unexpected")
-        return answer
+        return parse_chrome_cli_result(result.stdout)
     except subprocess.TimeoutExpired as exc:
         raise CheckoutError("Chrome checkout timed out; order outcome is uncertain") from exc
     finally:
