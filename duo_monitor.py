@@ -449,10 +449,32 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
         return True
     all_items = []
     errors = []
+    # Read the previous state ONCE. If the first valid ZIP response contains a
+    # genuinely NEW eligible 256GB Duo, do not wait for four further lookups
+    # before beginning the stock alert/Chrome handoff. Do not send extra
+    # requests, shorten the rate-limit interval, or bypass Apple's challenge.
+    previous_status = read_state(config["state_path"])["status"] if send else {}
     for zip_code in config["zip_codes"]:
         try:
             items = parse_inventory(fetch_inventory(zip_code), zip_code)
             all_items.extend(items)
+            if send:
+                new_eligible = []
+                for item in items:
+                    if item.status != "in_stock" or previous_status.get(item.key) == "in_stock":
+                        continue
+                    if canonical_store(item.store) is None:
+                        continue
+                    try:
+                        eligible_pickup_hours(item.store)
+                    except PickupConstraintError:
+                        continue
+                    new_eligible.append(item)
+                if new_eligible:
+                    LOG.warning(
+                        "NEW ELIGIBLE STOCK found on ZIP %s; prioritizing immediate "
+                        "Chrome handoff over remaining ZIP lookups", zip_code)
+                    break
         except InventoryError as exc:
             errors.append(f"{zip_code}: {exc}")
             LOG.error("%s", errors[-1])
@@ -470,7 +492,7 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     # Read-only lookups should not consume an alert by recording a new in-stock state.
     if not send:
         return not errors
-    state = read_state(config["state_path"])
+    state = {"status": previous_status}
     new, updated = compute_new_stock(all_items, state["status"])
     # If notifications fail, do not forget the new matches; retry on next poll.
     if new:
@@ -507,7 +529,9 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
             message += f"\n...and {len(new) - 8} more matches"
         message += "\nCheck that Apple offers Oct 27 pickup at 3:00 or 4:00 PM. Store is on your allowlist; drive time NOT verified."
         LOG.warning("NEW STOCK: %s", message.replace("\n", " | "))
-        delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
+        # Start the chosen LOCAL handoff before push notifications. ntfy or
+        # Telegram may hang for up to 12 seconds per request, and shouldn't
+        # delay getting the approved iPhone tab open in Chrome.
         initiated = False
         if config.get("stock_action", "notify") == "dry_run_bag":
             initiated = launch_nonpaying_stock_dry_run(top, config)
@@ -518,6 +542,7 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
         # an existing iPhone is already in the bag.
         if config.get("stock_action", "notify") != "dry_run_bag" and config["open_browser"] and not initiated:
             opened = open_from_config(buy_url, config)
+        delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
         if delivered or opened or initiated:
             state["status"] = updated
         else:
