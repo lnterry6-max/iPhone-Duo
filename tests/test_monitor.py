@@ -214,6 +214,85 @@ class ProductTests(unittest.TestCase):
                  patch.object(m.subprocess, "run", return_value=Mock(returncode=1)):
                 self.assertFalse(m.doctor(conf))
 
+    def test_simulated_stock_follows_only_safe_nonpaying_path(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            conf = {"checkout_mode": "chrome_extension", "stock_action": "dry_run_bag",
+                    "auto_checkout": False, "state_path": Path(temp) / "stock.json"}
+            with patch.object(m.sys, "platform", "darwin"), \
+                 patch.dict("os.environ", {"GITHUB_ACTIONS": "false"}), \
+                 patch.object(m, "PURCHASE_LOCK", Path(temp) / "purchase-lock.json"), \
+                 patch.object(m, "eligible_pickup_hours", return_value={15: True}), \
+                 patch.object(m, "fetch_inventory") as network, \
+                 patch.object(m, "launch_checkout_bot") as real_buy, \
+                 patch.object(m.subprocess, "Popen", return_value=Mock()) as launch:
+                self.assertTrue(m.simulate_stock_trigger(conf, "MK1E4LL/A", "Natick"))
+                self.assertFalse(m.simulate_stock_trigger(conf, "MK1E4LL/A", "Natick"))
+                real_buy.assert_not_called()
+                network.assert_not_called()
+                launch.assert_called_once()
+                args=launch.call_args.args[0]
+                self.assertIn("dry-run-bag", args)
+                self.assertNotIn("attempt-chrome", args)
+                claim=Path(temp) / "stock-dry-run-claimed.json"
+                data=m.json.loads(claim.read_text())
+                self.assertEqual(data["mode"], "nonpaying_dry_run")
+                self.assertEqual(data["sku"], "MK1E4LL/A")
+
+    def test_simulation_refuses_other_product_and_store(self):
+        conf={"stock_action": "dry_run_bag"}
+        with patch.object(m, "launch_nonpaying_stock_dry_run") as launch:
+            for sku, store in (("OTHER-PRODUCT", "Natick"),
+                               ("MK1E4LL/A", "New York Fifth Avenue")):
+                with self.assertRaises(ValueError):
+                    m.simulate_stock_trigger(conf, sku, store)
+            launch.assert_not_called()
+
+    def test_safe_stock_action_requires_explicit_optin(self):
+        with patch.dict("os.environ", {"CHECKOUT_MODE": "chrome_extension",
+                                        "STOCK_ACTION": "dry_run_bag",
+                                        "AUTO_CHECKOUT": "true",
+                                        "POLL_SECONDS": "180",
+                                        "ZIP_CODES": "01609"}):
+            config=m.get_config()
+            self.assertEqual(config["stock_action"], "dry_run_bag")
+            self.assertFalse(config["auto_checkout"])
+        with patch.dict("os.environ", {"STOCK_ACTION": "unknown", "ZIP_CODES": "01609"}):
+            with self.assertRaises(ValueError):
+                m.get_config()
+
+    def test_real_qualifying_stock_starts_nonpaying_dryrun(self):
+        conf = {"zip_codes": ["01609"], "period": 180, "preferred": "Star White",
+                "state_path": Path("/tmp/duo-stock-demo/state.json"),
+                "ntfy_topic": "", "ntfy_server": "https://ntfy.sh",
+                "telegram_token": "", "telegram_chat_id": "",
+                "open_browser": True, "browser_app": "Google Chrome",
+                "checkout_mode": "chrome_extension", "stock_action": "dry_run_bag",
+                "auto_checkout": False}
+        with tempfile.TemporaryDirectory() as temp:
+            conf["state_path"] = Path(temp) / "state.json"
+            with patch.object(m, "PURCHASE_LOCK", Path(temp) / "purchase-lock.json"), \
+                 patch.object(m, "fetch_inventory", return_value=sample("available")), \
+                 patch.object(m, "eligible_pickup_hours", return_value={15: True}), \
+                 patch.object(m, "send_alert", return_value=False), \
+                 patch.object(m, "open_from_config") as handoff, \
+                 patch.object(m, "launch_checkout_bot") as live_buy, \
+                 patch.object(m, "launch_nonpaying_stock_dry_run", return_value=True) as test_buy:
+                self.assertTrue(m.check(conf))
+                test_buy.assert_called_once()
+                live_buy.assert_not_called()
+                handoff.assert_not_called()
+
+    def test_nonpaying_dryrun_rejected_outside_mac_or_purchase_locked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            conf={"checkout_mode":"chrome_extension", "auto_checkout":False,
+                  "state_path":Path(temp)/"stock.json"}
+            item=m.Stock("Natick","R001","MK1E4LL/A","White 256GB","in_stock","01609")
+            with patch.object(m.sys, "platform", "linux"), \
+                 patch.object(m.subprocess, "Popen") as launch:
+                self.assertFalse(m.launch_nonpaying_stock_dry_run(item,conf))
+                launch.assert_not_called()
+
     def test_only_256gb_skus(self):
         self.assertEqual(set(m.PRODUCTS), {"MK1E4LL/A", "MK1F4LL/A"})
         self.assertIn("parts.0=MK1E4LL%2FA", m.stock_url("01609"))
