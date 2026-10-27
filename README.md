@@ -273,6 +273,34 @@ This opens the **existing bag** in attached Chrome, confirms the Star White 256G
 
 The screenshot showed **pickup unavailable at Blackstone Valley** at the time, but that does not confirm status for Natick or other allowed stores. Avoid assuming that a bag item reserves store inventory or that the requested next-day appointment will be offered. Continue to keep `AUTO_CHECKOUT=false` until checkout has been safely verified in the real Apple Store.
 
+## October 26 — monitored inventory health and one-order safety hardening
+
+### See whether the inventory monitor is actually working
+
+In the local project folder, after a scan has run:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 duo_monitor.py status
+```
+
+This is **offline**: no Apple requests or additional rate-limit risk. The watcher records each scan in `.state/inventory-health.json` and the `status` command reports:
+- `healthy`: all configured ZIP codes were queried and at least one valid allowed-store/SKU entry was parsed, with no request errors
+- `partial`: at least one valid result exists but another ZIP failed, or scanning stopped early on a genuine new stock hit for an immediate browser handoff; **this does not mean every ZIP was checked**
+- `unavailable`: no valid inventory entries were returned, e.g. Apple refused requests with HTTP 541; **NOT the same as sold out**
+- Last successful response timestamp and whether it's stale, along with errors and the actual ZIPs attempted
+
+You can run `python3 duo_monitor.py once --no-notify` for one **additional** manual scan (it won't notify or launch checkout); avoid repeated manual calls when Apple is rate-limiting. Normal `watch` mode still enforces the two-minute minimum and backs off after failures.
+
+### Checkout and duplicate safeguards
+
+The Chrome final-review validator additionally rejects a conflicting second Duo color, **another selected Apple Store**, another named Apple device, or more than one quantity line. It already insists on one approved 256GB Duo, no paid AppleCare, October 27 at 3:00/4:00 PM Eastern, one total under the configured cap, and an Apple shopping site. **If an order review differs from these requirements, checkout must stop.** The HTML labels are not an official API and live checkout has not yet been verified end-to-end.
+
+The local protected purchase attempt uses a **persistent global lock** before navigating the financial submission. If Apple might have received a payment click, or the browser fails after starting, the lock is **not automatically reset**; the watcher stops. Fresh authorization cannot override the lock. GitHub CI now tests both possible submission and uncertain-response scenarios without purchasing anything.
+
+**Recommended mode remains `CHECKOUT_MODE=chrome_extension`, `STOCK_ACTION=notify`, `AUTO_CHECKOUT=false`.** The project has not submitted a real order, confirmed a live Duo pickup time or solved Apple's intermittent HTTP 541 failures. Even perfect tests cannot guarantee a brief restock will be caught at 120-second polling intervals.
+
 ## Faster stock-to-Chrome handoff (October 26, 2026)
 
 The monitor formerly checked **all five ZIP codes** before handling even the first valid, new, eligible stock response, and then sent notification requests before opening Chrome. That could add substantial avoidable latency. It now:
