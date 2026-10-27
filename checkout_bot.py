@@ -339,6 +339,78 @@ def notify_checkout(title: str, message: str, sku: str) -> None:
         LOG.warning("Checkout outcome notification was not delivered: %s", type(exc).__name__)
 
 
+def parse_care_inspection(output: str) -> dict:
+    """Accept only a narrow allowlist of nonsensitive AppleCare UI labels."""
+    raw = output.strip()
+    if not raw or len(raw) > 50000:
+        raise CheckoutError("Care inspection returned invalid output")
+    try:
+        quoted = json.loads(raw)
+        if isinstance(quoted, str):
+            raw = quoted
+    except ValueError:
+        pass
+    marker = "DUO_CARE_INSPECT="
+    pos = raw.rfind(marker)
+    if pos < 0:
+        raise CheckoutError("No sanitized AppleCare inspection result received")
+    try:
+        result, _ = json.JSONDecoder().raw_decode(raw[pos + len(marker):].lstrip())
+    except ValueError as exc:
+        raise CheckoutError("AppleCare inspection result was malformed") from exc
+    if not isinstance(result, dict) or result.get("status") not in (
+        "controls_found", "no_visible_care_controls", "not_on_apple", "inspection_failed"
+    ):
+        raise CheckoutError("Unexpected AppleCare inspection status")
+    controls = result.get("controls", [])
+    if not isinstance(controls, list) or len(controls) > 20:
+        raise CheckoutError("Unexpected AppleCare control list")
+    filtered = []
+    for control in controls:
+        if not isinstance(control, dict):
+            raise CheckoutError("Unexpected AppleCare control entry")
+        role, label = control.get("role"), control.get("label")
+        if not isinstance(role, str) or not isinstance(label, str):
+            raise CheckoutError("Unexpected AppleCare control format")
+        if len(role) > 30 or len(label) > 140:
+            raise CheckoutError("Unexpectedly long AppleCare label")
+        if not re.search(r"applecare|no coverage|without coverage|no thanks|decline (?:coverage|applecare)|protection plan", label, re.I):
+            continue
+        filtered.append({"role": role, "label": label, "disabled": bool(control.get("disabled"))})
+    return {"status": result["status"], "controls": filtered}
+
+
+def inspect_applecare() -> None:
+    """Inspect ONLY care-related control labels on the currently selected Apple tab."""
+    if not connected_chrome_ready():
+        raise CheckoutError("Chrome extension is disconnected. Reattach to normal Chrome.")
+    script = Path(__file__).with_name("inspect_applecare.js")
+    if not script.is_file():
+        raise CheckoutError("The safe AppleCare inspector script is missing")
+    try:
+        proc = subprocess.run(
+            [str(chrome_cli()), "-s=chrome", "--raw", "run-code", f"--filename={script}"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=20, check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CheckoutError("Read-only AppleCare inspection timed out") from exc
+    if proc.returncode:
+        raise CheckoutError("Unable to inspect the active Chrome tab")
+    result = parse_care_inspection(proc.stdout)
+    if result["status"] == "not_on_apple":
+        raise CheckoutError("Select an apple.com product tab before inspecting")
+    if result["status"] == "inspection_failed":
+        raise CheckoutError("AppleCare controls could not be inspected")
+    if not result["controls"]:
+        print("No visible AppleCare controls detected on this tab.")
+        print("Apple may show coverage only at a later configurator or bag step.")
+        return
+    print("Visible AppleCare-related controls (read-only; no selections made):")
+    for item in result["controls"]:
+        print(f"  {item['role']}: {item['label']}")
+
+
 def parse_chrome_cli_result(output: str) -> dict:
     """Read only our prefixed, structured CLI result; never print raw page data.
 
@@ -580,6 +652,7 @@ def main() -> int:
     a.add_argument("--max-total", type=float, required=True, help="Maximum USD charge including tax")
     a.add_argument("--hours", type=float, default=4)
     commands.add_parser("disarm", help="Revoke purchase authorization")
+    commands.add_parser("inspect-applecare", help="Read-only Chrome AppleCare labels; no cart or payment changes")
     commands.add_parser("reset-purchase-lock", help="Manually unlock only after checking Apple orders")
     t = commands.add_parser("attempt", help="Triggered by the local stock monitor only")
     ca = commands.add_parser("attempt-chrome", help="One-shot live Chrome extension checkout; requires arm")
@@ -604,6 +677,8 @@ def main() -> int:
             login()
         elif args.command == "arm":
             arm(args)
+        elif args.command == "inspect-applecare":
+            inspect_applecare()
         elif args.command == "disarm":
             AUTH.unlink(missing_ok=True)
             print("Authorization revoked; any checkout currently running must also be stopped manually")
