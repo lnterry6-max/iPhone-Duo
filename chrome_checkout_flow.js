@@ -43,23 +43,41 @@ async page => {
     if (!await clickUnique(patterns, types)) throw Error('expected_control_missing');
   };
   const chooseNoAppleCare = async () => {
-    // Apple's US product pages offer an explicit "No AppleCare+ coverage"
-    // or "No AppleCare coverage" radio/label. Never select paid plans.
-    const withoutCare = /^No AppleCare(?:\+)? coverage$/i;
-    for (const type of ['radio', 'button']) {
-      const choice = page.getByRole(type, {name: withoutCare});
-      if (await choice.count() === 1 && await choice.isVisible() && await choice.isEnabled()) {
-        await choice.click({timeout: 4500});
+    // Based on the actual read-only Chrome inspection: Apple's visible label
+    // is "No AppleCare coverage", with an associated input. This is deliberately
+    // strict: never click an offered paid AppleCare+ or AppleCare One plan.
+    const withoutCare = /^\s*No AppleCare(?:\+)? coverage\s*$/i;
+    const labels = page.locator('label').filter({hasText: withoutCare});
+    const radios = page.getByRole('radio', {name: withoutCare});
+    // Apple's product page can render the insurance section after DOMContentLoaded.
+    // Give it at most twelve seconds, but never guess a different choice.
+    for (let attempt = 0; attempt < 24; attempt++) {
+      await stopOnChallenge();
+      if (await labels.count() === 1 && await labels.isVisible()) {
+        const label = labels;
+        const selectedBefore = await label.evaluate(node => {
+          const control = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
+          return !!control && control.checked === true;
+        });
+        if (!selectedBefore) await label.click({timeout:4500});
         await stopOnChallenge();
+        const selectedAfter = await label.evaluate(node => {
+          const control = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
+          return !!control && control.checked === true;
+        });
+        if (!selectedAfter) throw Error('no_applecare_selection_unverified');
         return true;
       }
-    }
-    // Some product pages expose text labels rather than accessible radio names.
-    const label = page.getByText(withoutCare, {exact: true});
-    if (await label.count() === 1 && await label.isVisible()) {
-      await label.click({timeout:4500});
-      await stopOnChallenge();
-      return true;
+      // Accessible-radio fallback for a different but still semantically
+      // correct Apple control; verify its checked state after selection.
+      if (await radios.count() === 1 && await radios.isVisible()) {
+        const radio = radios;
+        if (!await radio.isChecked()) await radio.check({timeout:4500});
+        await stopOnChallenge();
+        if (!await radio.isChecked()) throw Error('no_applecare_selection_unverified');
+        return true;
+      }
+      await page.waitForTimeout(500);
     }
     return false;
   };
@@ -183,7 +201,8 @@ async page => {
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
       'order_total_not_proven','price_above_cap','zip_entry_missing',
       'pickup_store_missing','pickup_time_selector_missing','review_navigation_missing',
-      'final_order_button_missing','no_applecare_option_missing','unexpected_applecare'
+      'final_order_button_missing','no_applecare_option_missing',
+      'no_applecare_selection_unverified','unexpected_applecare'
     ]);
     return fail(known.has(error?.message) ? error.message : 'checkout_interface_unrecognized');
   }
