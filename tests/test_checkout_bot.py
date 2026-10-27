@@ -174,6 +174,40 @@ class TestProductInspectorTests(unittest.TestCase):
             self.assertEqual(args[1:4], ["-s=chrome","--raw","run-code"])
             self.assertTrue(args[4].endswith("inspect_test_product.js"))
 
+    def test_pickup_signal_is_labeled_unconfirmed_and_limited_to_test_product(self):
+        from unittest.mock import call
+        result = ('DUO_TEST_PICKUP_INSPECT=' +
+                  bot.json.dumps({
+                    "status": "read_only",
+                    "controls": ["button: Check availability"],
+                    "stores": ["The Shops at Blackstone Valley"],
+                    "storeAvailability": [{
+                        "store": "The Shops at Blackstone Valley",
+                        "availability": "available"
+                    }],
+                    "pickupUiPresent": True,
+                  }))
+        with patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run",
+                          return_value=Mock(returncode=0, stdout=result)), \
+             patch("builtins.print") as printing:
+            bot.inspect_test_product()
+        lines = [str(c.args[0]) for c in printing.call_args_list]
+        self.assertTrue(any("unconfirmed UI signal" in x for x in lines))
+        self.assertTrue(any("test product only" in x for x in lines))
+
+    def test_inspector_refuses_unapproved_store_result(self):
+        result = ('DUO_TEST_PICKUP_INSPECT=' +
+                  bot.json.dumps({"status":"read_only","controls":[],
+                                  "stores":["Apple Fifth Avenue"],
+                                  "storeAvailability":[],
+                                  "pickupUiPresent":False}))
+        with patch.object(bot,"connected_chrome_ready",return_value=True), \
+             patch.object(bot.subprocess,"run",
+                          return_value=Mock(returncode=0,stdout=result)):
+            with self.assertRaises(CheckoutError):
+                bot.inspect_test_product()
+
     def test_inspector_rejects_untrusted_or_malformed_result(self):
         with patch.object(bot, "connected_chrome_ready", return_value=True), \
              patch.object(bot.subprocess, "run", return_value=Mock(returncode=0, stdout="secret account output")):
