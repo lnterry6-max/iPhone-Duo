@@ -5,6 +5,17 @@ from pathlib import Path
 
 
 class AppleCareJavaScriptTests(unittest.TestCase):
+    def test_product_add_to_bag_or_continue(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js not installed")
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [node, str(root / "tests" / "test_product_add_to_bag.mjs")],
+            cwd=root, capture_output=True, text=True, timeout=12, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr[-1500:])
+
     def test_bag_checkout_button_or_link(self):
         node = shutil.which("node")
         if not node:
