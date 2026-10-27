@@ -233,6 +233,14 @@ The inspector never clicks anything, makes an order, reads cookies, or exports a
 
 Do not share private session information or the full Playwright snapshot. If the controls report different wording, the selector can be adjusted based on those observed labels. A purchase flow must still reject any additional protection plans and check the final order total. Existing Apple checkout automation has **not** been proven safe for unattended payment and must remain disabled until manually tested.
 
+## October 26, 10:37 PM — pickup option works; no in-store offer yet
+
+The latest supervised `dry-run-bag` successfully clicked Apple's **“I'll pick it up”** choice, then stopped safely at `pickup / pickup_after_choice / zip_entry_missing`. The user reports that no approved stores currently show pickup inventory. This is **not proof** that every store is sold out at the same moment; the screenshots establish only that this checkout session did not provide the ZIP control our script expected. Earlier Apple's private pickup endpoint also returned HTTP 541, so automated restock detection cannot currently be relied upon.
+
+The checkout script now waits briefly for a ZIP/location field rather than assuming it exists instantly. If Apple's page **explicitly states** that there are no stores offering pickup, it reports `pickup_no_stores_available`. If it explicitly says the selected store is unavailable, it reports `pickup_requested_store_unavailable`. Otherwise, it continues to report `zip_entry_missing` to avoid falsely treating unknown layouts or a single unavailable location as every store being sold out. **Never force delivery** or pick another store/time not on the user allowlist.
+
+No order has been submitted. Keep the exact one-phone shopping bag, **no paid AppleCare**, and `AUTO_CHECKOUT=false`. Don't repeatedly rerun the dry run while no acceptable pickup inventory is being offered; wait for Apple to show an eligible store and the approved October 27, 3:00/4:00 PM slot, then continue safely. A phone sitting in the bag is **not** a reservation.
+
 ## October 26, 10:34 PM — “I'll pick it up” at checkout
 
 The bag-only dry run reached **Apple's pickup versus delivery selection** but stopped at `pickup / bag_checkout_verify / expected_control_missing`. The checkout flow previously expected a generic `Pick Up` button, while Apple actually shows **“I'll pick it up”**.
