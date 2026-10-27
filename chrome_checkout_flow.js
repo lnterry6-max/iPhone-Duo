@@ -42,6 +42,27 @@ async page => {
   const requireClick = async (patterns, types=['button']) => {
     if (!await clickUnique(patterns, types)) throw Error('expected_control_missing');
   };
+  const chooseNoAppleCare = async () => {
+    // Apple's US product pages offer an explicit "No AppleCare+ coverage"
+    // or "No AppleCare coverage" radio/label. Never select paid plans.
+    const withoutCare = /^No AppleCare(?:\\+)? coverage$/i;
+    for (const type of ['radio', 'button']) {
+      const choice = page.getByRole(type, {name: withoutCare});
+      if (await choice.count() === 1 && await choice.isVisible() && await choice.isEnabled()) {
+        await choice.click({timeout: 4500});
+        await stopOnChallenge();
+        return true;
+      }
+    }
+    // Some product pages expose text labels rather than accessible radio names.
+    const label = page.getByText(withoutCare, {exact: true});
+    if (await label.count() === 1 && await label.isVisible()) {
+      await label.click({timeout:4500});
+      await stopOnChallenge();
+      return true;
+    }
+    return false;
+  };
   const findReview = async () => {
     const candidates = [
       '[data-autom="order-summary"]', '[data-testid="order-summary"]',
@@ -62,6 +83,10 @@ async page => {
       if (!s.includes(required)) throw Error('order_mismatch');
     }
     if (/512gb|1tb|2tb/.test(s)) throw Error('wrong_storage');
+    // Refuse summaries that explicitly show an additional AppleCare plan.
+    // A generic AppleCare upsell is not proof of an order, so be conservative.
+    if (/applecare\\s*(?:\\+|one).*?(?:\\$\\s*\\d|per month|monthly|annual)/i.test(s)
+        && !/no applecare\\+? coverage/i.test(s)) throw Error('unexpected_applecare');
     if (!/(?:quantity|qty)\s*:?\s*1\b/.test(s)) throw Error('quantity_not_proven');
     if (/(?:quantity|qty)\s*:?\s*[2-9]/.test(s)) throw Error('wrong_quantity');
     if (!/\b(?:oct(?:ober)?\.?\s+27(?:,?\s+2026)?|10\/27(?:\/2026)?|2026-10-27)\b/.test(s)) throw Error('wrong_pickup_date');
@@ -83,7 +108,10 @@ async page => {
     stage = 'product';
     await page.goto(cfg.url, {waitUntil:'domcontentloaded', timeout:30000});
     await stopOnChallenge();
-    // Avoid interacting with an old bag if Apple's product configurator differs.
+    stage = 'applecare';
+    if (!await chooseNoAppleCare()) throw Error('no_applecare_option_missing');
+    // Never continue if the explicit no-coverage choice isn't available.
+    stage = 'product';
     await requireClick([/^add to bag$/i, /^add to cart$/i]);
     stage = 'bag';
     await page.goto('https://www.apple.com/shop/bag', {waitUntil:'domcontentloaded', timeout:30000});
@@ -155,7 +183,7 @@ async page => {
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
       'order_total_not_proven','price_above_cap','zip_entry_missing',
       'pickup_store_missing','pickup_time_selector_missing','review_navigation_missing',
-      'final_order_button_missing'
+      'final_order_button_missing','no_applecare_option_missing','unexpected_applecare'
     ]);
     return fail(known.has(error?.message) ? error.message : 'checkout_interface_unrecognized');
   }
