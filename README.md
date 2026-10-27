@@ -167,6 +167,22 @@ python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip
 
 Keep `AUTO_CHECKOUT=false`. The dry run may still stop on a later unrecognized Apple control; the reported stage/code should guide further nonpaying diagnostics. Avoid sharing any account data or Chrome session tokens.
 
+## Checkout stop at `care_challenge_check` (October 26, 9:40 PM)
+
+In the supervised `dry-run-chrome`, Chrome stopped at `applecare / care_challenge_check / checkout_interface_unrecognized`, **before** attempting the no-coverage selection. This does not establish that Apple blocked the session or that the AppleCare control is wrong. The previous verifier read the whole `body` once and turned any transient page-read failure into a generic code.
+
+The verifier now retries **only the read** up to 3 times during ordinary configurator rendering, and fails closed with `challenge_page_unreadable` if none succeeds. It continues to stop immediately on an identified human verification/CAPTCHA or a non-Apple URL. There is no challenge bypass, alternative credentials, or proxy behavior.
+
+To test without paying, keep the Playwright Chrome extension attached, check for test items in your bag, and run:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
+```
+
+Keep `AUTO_CHECKOUT=false`. If it stops, share the final `Stopped at ... / ... : ...` line only. A local browser page must remain readable and free of verification challenges before advancing to the next stage.
+
 ## AppleCare labeled-input fix (October 26, 9:33 PM)
 
 The supervised dry run advanced to Apple's AppleCare selection but returned `stopped at applecare: checkout_interface_unrecognized`. **No purchase was submitted.** This generic error could be caused by the old wrapper-label check, but the live underlying exception has not been inspected.
