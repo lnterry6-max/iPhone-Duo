@@ -168,6 +168,32 @@ async page => {
     }
     return false;
   };
+  const readPickupAvailability = async () => {
+    // Return only a minimal status; never expose account or bag text.
+    // A single unavailable store is NOT evidence that all five lack stock.
+    operation='pickup_read_availability';
+    return page.evaluate(store => {
+      const lines=(document.body?.innerText||'').split(/\r?\n/)
+        .map(x=>x.trim().replace(/\s+/g,' ').toLowerCase())
+        .filter(x=>x && x.length < 180);
+      const exactNoStores=[
+        /\bno (?:apple )?stores? (?:nearby|near you|in your area|are )?available for (?:store )?pick\s*up\b/,
+        /\bno (?:available|eligible) (?:pick\s*up )?(?:stores?|locations?)\b/,
+        /\bpick\s*up (?:is )?(?:not available|unavailable) (?:at any|near you|in your area)\b/,
+        /\bno stores? (?:currently )?offer(?:s|ing)? pick\s*up\b/
+      ];
+      if (lines.some(line=>exactNoStores.some(rx=>rx.test(line)))) return 'no_stores';
+      const requested='apple '+String(store||'').toLowerCase().trim();
+      // Only a line explicitly naming the REQUESTED store may determine that
+      // store is unavailable. An unrelated Blackstone Valley row must not
+      // mark Natick as unavailable.
+      const unavailable=/(?:unavailable|not available|out of stock)(?:\s+for)?\s+pick\s*up|pick\s*up.*(?:unavailable|not available|out of stock)/;
+      if (requested.length>6 && lines.some(line=>
+        (line.includes(requested) || line.includes(requested.slice(6)))
+        && unavailable.test(line))) return 'requested_store_unavailable';
+      return 'unknown';
+    },cfg.store);
+  };
   const chooseStorePickup = async () => {
     // Apple can label the shipping/pickup choice "I'll pick it up".
     // Match only intentional pickup controls; never "Deliver it".
@@ -422,7 +448,26 @@ async page => {
     stage = 'pickup';
     await chooseStorePickup();
     const zip = page.getByRole('textbox', {name:/zip|location|postal/i});
-    if (await zip.count() !== 1) throw Error('zip_entry_missing');
+    // If Apple has no pickup offer there may be no ZIP-code field at all.
+    // Wait for the form to appear, but distinguish explicit unavailability
+    // from a layout we simply do not recognize.
+    let zipReady=false;
+    for(let attempt=0;attempt<20;attempt++){
+      operation='pickup_find_zip';
+      const count=await zip.count();
+      if(count>1)throw Error('zip_entry_ambiguous');
+      if(count===1 && await zip.isVisible() && await zip.isEnabled()){
+        zipReady=true;
+        break;
+      }
+      const availability=await readPickupAvailability();
+      if(availability==='no_stores')throw Error('pickup_no_stores_available');
+      if(availability==='requested_store_unavailable')throw Error('pickup_requested_store_unavailable');
+      operation='pickup_wait_for_zip';
+      await page.waitForTimeout(500);
+    }
+    if(!zipReady)throw Error('zip_entry_missing');
+    operation='pickup_fill_zip';
     await zip.fill(cfg.zip);
     await zip.press('Enter');
     await page.waitForTimeout(700);
@@ -489,6 +534,7 @@ async page => {
       'final_review_missing','order_mismatch','wrong_storage','quantity_not_proven',
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
       'order_total_not_proven','price_above_cap','zip_entry_missing',
+      'zip_entry_ambiguous','pickup_no_stores_available','pickup_requested_store_unavailable',
       'pickup_store_missing','pickup_choice_missing','pickup_choice_ambiguous',
       'pickup_choice_not_selected','pickup_time_selector_missing','review_navigation_missing',
       'final_order_button_missing','no_applecare_option_missing',
