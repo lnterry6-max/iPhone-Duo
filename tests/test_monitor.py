@@ -162,12 +162,23 @@ class ProductTests(unittest.TestCase):
             self.assertFalse(m.open_in_connected_chrome("https://www.apple.com/shop/bag"))
             run.assert_not_called()
 
-    def test_extension_unavailable_falls_back_to_normal_chrome(self):
-        with patch.object(m, "open_in_connected_chrome", return_value=False), \
-             patch.object(m, "open_checkout_page", return_value=True) as fallback:
-            self.assertTrue(m.open_from_config(m.BUY_URLS["MK1E4LL/A"],
-                                              {"checkout_mode": "chrome_extension", "browser_app": "Safari"}))
-            fallback.assert_called_once_with(m.BUY_URLS["MK1E4LL/A"], "Google Chrome")
+    def test_stock_alert_uses_fast_normal_chrome_without_cli_wait(self):
+        with patch.object(m, "open_in_connected_chrome") as slow, \
+             patch.object(m, "open_checkout_page", return_value=True) as fast:
+            self.assertTrue(m.open_from_config(
+                m.BUY_URLS["MK1E4LL/A"],
+                {"checkout_mode": "chrome_extension", "stock_action": "notify", "browser_app": "Safari"}))
+            fast.assert_called_once_with(m.BUY_URLS["MK1E4LL/A"], "Google Chrome")
+            slow.assert_not_called()
+
+    def test_normal_chrome_failure_falls_back_to_extension(self):
+        with patch.object(m, "open_in_connected_chrome", return_value=True) as slow, \
+             patch.object(m, "open_checkout_page", return_value=False) as fast:
+            self.assertTrue(m.open_from_config(
+                m.BUY_URLS["MK1E4LL/A"],
+                {"checkout_mode": "chrome_extension", "stock_action": "notify", "browser_app": "Safari"}))
+            fast.assert_called_once_with(m.BUY_URLS["MK1E4LL/A"], "Google Chrome")
+            slow.assert_called_once_with(m.BUY_URLS["MK1E4LL/A"])
 
     def test_chrome_extension_handoff_never_launches_checkout_bot(self):
         with tempfile.TemporaryDirectory() as temp:
