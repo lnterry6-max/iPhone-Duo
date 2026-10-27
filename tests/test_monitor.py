@@ -117,6 +117,27 @@ class ProductTests(unittest.TestCase):
                 buy.assert_not_called()
                 handoff.assert_called_once_with(m.BUY_URLS["MK1E4LL/A"], config)
 
+    def test_confirmed_purchase_stops_watcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "purchase-lock.json"
+            with patch.object(m, "PURCHASE_LOCK", lock), \
+                 patch("builtins.input", return_value="ORDER CONFIRMED"), \
+                 patch.object(m, "fetch_inventory") as fetch:
+                m.mark_purchased()
+                self.assertTrue(lock.exists())
+                self.assertEqual(m.json.loads(lock.read_text())["status"], "manually_confirmed")
+                self.assertTrue(m.check({"zip_codes": ["01609"]}))
+                fetch.assert_not_called()
+
+    def test_mark_purchased_requires_real_confirmation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "purchase-lock.json"
+            with patch.object(m, "PURCHASE_LOCK", lock), \
+                 patch("builtins.input", return_value="no"):
+                with self.assertRaises(ValueError):
+                    m.mark_purchased()
+                self.assertFalse(lock.exists())
+
     def test_only_256gb_skus(self):
         self.assertEqual(set(m.PRODUCTS), {"MK1E4LL/A", "MK1F4LL/A"})
         self.assertIn("parts.0=MK1E4LL%2FA", m.stock_url("01609"))
