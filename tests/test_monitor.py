@@ -74,10 +74,17 @@ class ProductTests(unittest.TestCase):
             binary = Path(temp) / "playwright-cli"
             binary.touch()
             with patch.object(m.sys, "platform", "darwin"), \
+                 patch.dict("os.environ", {"GITHUB_ACTIONS": "false"}), \
                  patch.object(m.subprocess, "run", return_value=Mock(returncode=0)) as run:
                 url = m.BUY_URLS["MK1F4LL/A"]
                 self.assertTrue(m.open_in_connected_chrome(url, cli_path=binary))
                 self.assertEqual(run.call_args.args[0], [str(binary), "-s=chrome", "tab-new", url])
+
+    def test_github_hosted_runner_cannot_control_connected_chrome(self):
+        with patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}), \
+             patch.object(m.subprocess, "run") as run:
+            self.assertFalse(m.open_in_connected_chrome(m.BUY_URLS["MK1E4LL/A"]))
+            run.assert_not_called()
 
     def test_connected_chrome_rejects_unapproved_url_without_launching(self):
         with patch.object(m.subprocess, "run") as run:
