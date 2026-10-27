@@ -29,7 +29,7 @@ This opens the Star White 256GB product page in your selected existing browser; 
 python3 duo_monitor.py watch
 ```
 
-**Browser handoff is intentionally manual checkout.** The Python checkout bot's Playwright persistent-context launcher cannot safely reuse Chrome's regular main profile, and it cannot control installed Safari. However, Microsoft's separate Playwright Extension/CLI can connect to Chrome tabs you already have open; see the supported diagnostic approach below. This is not currently wired into the Python checkout bot. A manual tab handoff uses your existing session without copying passwords, cookies, verification codes, or card details. The stock check alone does not confirm the exact October 27 pickup appointment; you must check 3:00/4:00 PM in Apple's checkout.
+**Browser handoff is intentionally manual checkout.** The Python checkout bot's Playwright persistent-context launcher cannot safely reuse Chrome's regular main profile, and it cannot control installed Safari. However, Microsoft's separate Playwright Extension/CLI can connect to Chrome tabs you already have open; see the supported diagnostic approach below. It is now wired into the **stock monitor's safe tab-opening flow**, but **not** into the experimental Python payment/checkout bot. A manual tab handoff uses your existing session without copying passwords, cookies, verification codes, or card details. The stock check alone does not confirm the exact October 27 pickup appointment; you must check 3:00/4:00 PM in Apple's checkout.
 
 `CHECKOUT_MODE=browser_handoff` ensures the monitor **never starts the automated purchase process**, even if an old local `AUTO_CHECKOUT=true` value remains. Experimental checkout is a separate, explicitly configured mode; it is not recommended when Apple refuses to complete sign-in in a dedicated browser.
 
@@ -54,6 +54,51 @@ The snapshot is for diagnostics only: verify that the CLI can inspect your norma
 **Important: the repository's existing Python `checkout_bot.py` does not use the extension**. It still launches a separate Playwright browser profile, so switching to this extension does not automatically enable unattended payment. Attaching Chrome is a potential foundation for a *future* checkout assistant that navigates to an order review and asks you to confirm the final purchase. For now, use `CHECKOUT_MODE=browser_handoff`, `BROWSER_APP=Google Chrome`, `AUTO_CHECKOUT=false`, and test without placing an order.
 
 Microsoft documentation: [Connecting to Browsers](https://playwright.dev/mcp/configuration/browser-extension) and [Playwright CLI](https://playwright.dev/docs/getting-started-cli).
+
+## Connected Chrome extension handoff (now integrated)
+
+Your normal Chrome + Microsoft Playwright Extension connection can now be used by **the stock monitor**. This is a tested-at-the-code-level, **manual payment** handoff, not fully automatic checkout. When a matching SKU first comes in stock at one of the five approved stores, the monitor runs the installed Playwright CLI command `-s=chrome tab-new <approved-Apple-product-URL>` against the **existing Chrome session** and opens a tab to the correct 256GB phone. It **never runs `open`** (which creates a new browser profile), and never reads browser cookies, account snapshots, passwords, or payment information.
+
+### On your Mac
+
+Update your local checkout monitor and local `.env`:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+open -e .env
+```
+
+Set these values in the **uncommitted** `.env`:
+
+```dotenv
+CHECKOUT_MODE=chrome_extension
+BROWSER_APP=Google Chrome
+OPEN_BROWSER=true
+AUTO_CHECKOUT=false
+```
+
+Before starting, leave your regular Chrome and Playwright Extension running and connect it using:
+
+```bash
+"$HOME/.local/bin/playwright-cli" attach --extension=chrome
+```
+
+If it says the `chrome` session is already attached, leave it attached; do not run `playwright-cli open`.
+
+### Test without making a purchase
+
+```bash
+python3 duo_monitor.py prepare-checkout
+```
+
+This should open the **Star White 256GB** product page in a new tab of your *already attached* Chrome, without touching your shopping bag or attempting checkout. Then use `python3 duo_monitor.py watch` to monitor restocks.
+
+If your Chrome extension session has disconnected (for example, you closed the tab it was attached to), the monitor will **fall back to opening the product in ordinary Chrome** with a warning rather than launching Chrome for Testing. You may need to reconnect the extension.
+
+**These are still two independent systems:** `duo_monitor.py` can open a product tab via the official Chrome extension; the experimental `checkout_bot.py` is unchanged and would still launch its *separate browser profile* if explicitly selected. In `CHECKOUT_MODE=chrome_extension`, `AUTO_CHECKOUT` has no purchasing effect. No Apple order is submitted, and you must verify your requested October 27 3:00/4:00 PM pickup and place an order manually. The monitor cannot detect a manually completed purchase; stop the watcher yourself once you buy something.
+
+Chrome extension access is powerful and may include sensitive open tabs. Do not upload the extension connection token, session snapshots, or browser logs to GitHub, and do not bypass any Apple login or human verification checks.
 
 ## Exactly five Apple Stores
 
