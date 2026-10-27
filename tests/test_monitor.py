@@ -19,6 +19,76 @@ def sample(white="unavailable", black="unavailable"):
     ]}}
 
 
+class FastHandoffTests(unittest.TestCase):
+    def cfg(self, temp):
+        return {
+            "zip_codes": ["01609", "01760", "02116", "02467", "02026"],
+            "period": 180,
+            "preferred": "Star White",
+            "state_path": Path(temp) / "state.json",
+            "ntfy_topic": "",
+            "ntfy_server": "https://ntfy.sh",
+            "telegram_token": "",
+            "telegram_chat_id": "",
+            "open_browser": True,
+            "browser_app": "Google Chrome",
+            "checkout_mode": "chrome_extension",
+            "stock_action": "notify",
+            "auto_checkout": False,
+        }
+
+    def test_new_approved_restock_handoffs_before_remaining_zip_queries_or_slow_alert(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = self.cfg(temp)
+            calls = []
+            def fetch(zip_code):
+                calls.append("fetch:" + zip_code)
+                return sample("available")
+            def chrome(url, config):
+                calls.append("chrome")
+                return True
+            def notify(*args):
+                calls.append("notify")
+                return True
+            with patch.object(m, "PURCHASE_LOCK", Path(temp) / "not-purchased.json"), \
+                 patch.object(m, "fetch_inventory", side_effect=fetch) as network, \
+                 patch.object(m, "eligible_pickup_hours", return_value={15: True}), \
+                 patch.object(m, "open_from_config", side_effect=chrome), \
+                 patch.object(m, "send_alert", side_effect=notify):
+                self.assertTrue(m.check(cfg))
+                network.assert_called_once_with("01609")
+                self.assertEqual(calls, ["fetch:01609", "chrome", "notify"])
+
+    def test_known_stock_does_not_short_circuit_checks_for_new_stores(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg=self.cfg(temp)
+            m.write_state(cfg["state_path"], {"status":{"R001|MK1E4LL/A":"in_stock"},
+                                               "last_failure_alert":42})
+            with patch.object(m, "PURCHASE_LOCK", Path(temp) / "not-purchased.json"), \
+                 patch.object(m, "fetch_inventory", return_value=sample("available")) as network, \
+                 patch.object(m, "eligible_pickup_hours", return_value={15: True}), \
+                 patch.object(m, "send_alert") as alert, \
+                 patch.object(m, "open_from_config") as browser:
+                self.assertTrue(m.check(cfg))
+                self.assertEqual(network.call_count, 5)
+                alert.assert_not_called()
+                browser.assert_not_called()
+                state=m.read_state(cfg["state_path"])
+                self.assertEqual(state["last_failure_alert"],42)
+
+    def test_read_only_once_still_checks_every_zip(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg=self.cfg(temp)
+            with patch.object(m, "PURCHASE_LOCK", Path(temp) / "not-purchased.json"), \
+                 patch.object(m, "fetch_inventory", return_value=sample("available")) as network, \
+                 patch.object(m, "send_alert") as alert, \
+                 patch.object(m, "open_from_config") as browser:
+                self.assertTrue(m.check(cfg,send=False))
+                self.assertEqual(network.call_count,5)
+                alert.assert_not_called()
+                browser.assert_not_called()
+
+
 class ProductTests(unittest.TestCase):
     def test_default_handoff_blocks_experimental_checkout_even_if_env_says_true(self):
         with patch.dict("os.environ", {"AUTO_CHECKOUT": "true", "CHECKOUT_MODE": "browser_handoff",
