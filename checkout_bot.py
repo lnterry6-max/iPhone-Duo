@@ -441,7 +441,7 @@ def parse_chrome_cli_result(output: str) -> dict:
         raise CheckoutError("Chrome checkout result was unexpected")
     return {
         key: answer[key]
-        for key in ("status", "stage", "code", "clickedOrderButton", "total_usd")
+        for key in ("status", "stage", "step", "code", "clickedOrderButton", "total_usd")
         if key in answer
     }
 
@@ -573,8 +573,8 @@ def dry_run_chrome(args: argparse.Namespace) -> None:
     result = chrome_checkout_flow(stock, args.max_total, hours, submit_order=False)
     LOG.info("Review-only Chrome test result: %s (no purchase submitted)", result.get("status"))
     if result.get("status") == "stopped":
-        LOG.warning("Stopped at %s: %s. Inspect Chrome manually; do not enable auto until the flow is understood.",
-                    result.get("stage"), result.get("code"))
+        LOG.warning("Stopped at %s / %s: %s. Inspect Chrome manually; do not enable auto until the flow is understood.",
+                    result.get("stage"), result.get("step", "unspecified"), result.get("code"))
     elif result.get("status") == "review_verified":
         LOG.info("Apple review summary matched restrictions; final order NOT clicked.")
     else:
