@@ -31,6 +31,72 @@ class PaymentPreflightTests(unittest.TestCase):
             self.assertTrue(any("Exact store/date/time final review" in line for line in labels))
 
 
+class SinglePurchaseLockTests(unittest.TestCase):
+    def test_apple_prefix_store_verified_and_one_submit_prevents_second_attempt(self):
+        from duo_monitor import Stock
+        item = Stock("Apple Natick", "R001", "MK1E4LL/A",
+                     "Star White — 256GB", "in_stock", "01609")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            auth = {"status":"armed", "expires_at": bot.time.time() + 3600,
+                    "max_total_usd":2200, "quantity":1,
+                    "allow_submit":True, "checkout_mode":"chrome_auto"}
+            args = Mock(sku="MK1E4LL/A", store_id="R001",
+                        store_name="Natick", zip_code="01609")
+            with patch.object(bot, "AUTH", base / "auth.json"), \
+                 patch.object(bot, "PURCHASE_LOCK", base / "purchase-lock.json"), \
+                 patch.object(bot, "LOCK", base / "attempt.lock"), \
+                 patch.object(bot, "read_auth", return_value=auth), \
+                 patch.object(bot, "get_config", return_value={"checkout_mode":"chrome_auto"}), \
+                 patch.object(bot, "verify_stock", return_value=item) as verify, \
+                 patch.object(bot, "eligible_pickup_hours", return_value={15:True}), \
+                 patch.object(bot, "connected_chrome_ready", return_value=True), \
+                 patch.object(bot, "chrome_checkout_flow",
+                              return_value={"status":"submitted_unverified"}) as flow, \
+                 patch.object(bot, "notify_checkout"):
+                bot.attempt_chrome(args)
+                self.assertEqual(flow.call_count,1)
+                result=bot.json.loads((base / "purchase-lock.json").read_text())
+                self.assertEqual(result["status"],"submitted_unverified")
+                self.assertEqual(auth["status"],"attempted")
+                # Even a fresh authorization must not permit a second attempt.
+                auth["status"]="armed"
+                with self.assertRaises(CheckoutError):
+                    bot.attempt_chrome(args)
+                flow.assert_called_once()
+                verify.assert_called_once()
+
+    def test_unknown_browser_failure_keeps_global_purchase_lock(self):
+        from duo_monitor import Stock
+        item = Stock("Apple Natick", "R001", "MK1E4LL/A",
+                     "Star White — 256GB", "in_stock", "01609")
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp)
+            auth={"status":"armed", "expires_at":bot.time.time()+3600,
+                  "max_total_usd":2200, "quantity":1,
+                  "allow_submit":True, "checkout_mode":"chrome_auto"}
+            args=Mock(sku="MK1E4LL/A",store_id="R001",
+                      store_name="Natick",zip_code="01609")
+            with patch.object(bot,"AUTH",base/"auth.json"), \
+                 patch.object(bot,"PURCHASE_LOCK",base/"purchase-lock.json"), \
+                 patch.object(bot,"LOCK",base/"attempt.lock"), \
+                 patch.object(bot,"read_auth",return_value=auth), \
+                 patch.object(bot,"get_config",return_value={"checkout_mode":"chrome_auto"}), \
+                 patch.object(bot,"verify_stock",return_value=item), \
+                 patch.object(bot,"eligible_pickup_hours",return_value={15:True}), \
+                 patch.object(bot,"connected_chrome_ready",return_value=True), \
+                 patch.object(bot,"chrome_checkout_flow",side_effect=RuntimeError("unknown Apple response")) as flow, \
+                 patch.object(bot,"notify_checkout"):
+                with self.assertRaises(RuntimeError):
+                    bot.attempt_chrome(args)
+                lock=bot.json.loads((base/"purchase-lock.json").read_text())
+                self.assertEqual(lock["status"],"checkout_started")
+                auth["status"]="armed"
+                with self.assertRaises(CheckoutError):
+                    bot.attempt_chrome(args)
+                flow.assert_called_once()
+
+
 class AuthorizationTests(unittest.TestCase):
     def test_only_256gb(self):
         with self.assertRaises(CheckoutError):
