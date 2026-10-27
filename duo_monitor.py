@@ -122,11 +122,15 @@ def get_config() -> dict[str, Any]:
     checkout_mode = os.getenv("CHECKOUT_MODE", "browser_handoff").strip().lower()
     if checkout_mode not in ("browser_handoff", "chrome_extension", "experimental", "chrome_auto"):
         raise ValueError("CHECKOUT_MODE must be browser_handoff, chrome_extension, chrome_auto, or experimental")
+    stock_action = os.getenv("STOCK_ACTION", "notify").strip().lower()
+    if stock_action not in ("notify", "dry_run_bag"):
+        raise ValueError("STOCK_ACTION must be notify or dry_run_bag")
     browser_app = os.getenv("BROWSER_APP", "Safari").strip()
     if browser_app not in ("Safari", "Google Chrome", "Default"):
         raise ValueError("BROWSER_APP must be Safari, Google Chrome, or Default")
     return {
         "checkout_mode": checkout_mode,
+        "stock_action": stock_action,
         "browser_app": browser_app,
         "zip_codes": list(dict.fromkeys(zip_codes)),
         "period": period,
@@ -378,6 +382,65 @@ def launch_checkout_bot(stock: Stock, config: dict[str, Any]) -> bool:
         return False
 
 
+def launch_nonpaying_stock_dry_run(stock: Stock, config: dict[str, Any]) -> bool:
+    """Run exactly one dry-run on real eligible Duo stock; NEVER submit a payment.
+
+    Uses the existing bag without adding duplicate phones. A durable local
+    claim prevents another trigger after a process restart or an uncertain
+    browser result. This deliberately does NOT call attempt-chrome.
+    """
+    if config.get("checkout_mode") != "chrome_extension" or config.get("auto_checkout"):
+        LOG.warning("Safe stock dry run requires chrome_extension with automatic payment OFF")
+        return False
+    if os.getenv("GITHUB_ACTIONS", "").lower() == "true" or sys.platform != "darwin":
+        LOG.warning("Chrome dry run can only launch on your local Mac")
+        return False
+    if stock.sku not in PRODUCTS or canonical_store(stock.store) is None or stock.status != "in_stock":
+        LOG.error("Stock dry run rejected product, store, or availability status")
+        return False
+    try:
+        eligible_pickup_hours(stock.store)
+    except PickupConstraintError as exc:
+        LOG.warning("No authorized pickup hours remain: %s", exc)
+        return False
+    if purchase_lock_reason():
+        return False
+    script = Path(__file__).resolve().with_name("checkout_bot.py")
+    if not script.is_file():
+        LOG.error("checkout_bot.py is missing")
+        return False
+    state_dir = Path(config["state_path"]).parent
+    state_dir.mkdir(parents=True, exist_ok=True)
+    claim_path = state_dir / "stock-dry-run-claimed.json"
+    try:
+        # O_EXCL protects against concurrent scans or duplicate alerts.
+        fd = os.open(claim_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        LOG.warning("Dry-run launch already claimed; no duplicate checkout process")
+        return False
+    except OSError as exc:
+        LOG.error("Cannot record safe stock trigger: %s", type(exc).__name__)
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"sku": stock.sku, "store": stock.store,
+                   "triggered_at": datetime.now(timezone.utc).isoformat(),
+                   "mode": "nonpaying_dry_run"}, f)
+        f.write("\\n")
+    args = [sys.executable, str(script), "dry-run-bag", "--sku", stock.sku,
+            "--store-name", canonical_store(stock.store),
+            "--zip-code", stock.zip_code, "--max-total", "2200"]
+    try:
+        with (state_dir / "stock-dry-run.log").open("a", encoding="utf-8") as log:
+            subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                             start_new_session=True, cwd=str(script.parent))
+        LOG.warning("Eligible Duo inventory detected: launched ONE NONPAYING Chrome bag dry-run")
+        return True
+    except OSError as exc:
+        # Keep the claim: an uncertain launch must not cause a second attempt.
+        LOG.error("Dry-run launcher failed (%s); claim retained", type(exc).__name__)
+        return False
+
+
 def check(config: dict[str, Any], *, send: bool = True) -> bool:
     """Run a round. Returns true when Apple responded validly to every configured ZIP."""
     reason = purchase_lock_reason()
@@ -446,10 +509,14 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
         LOG.warning("NEW STOCK: %s", message.replace("\n", " | "))
         delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
         initiated = False
-        if config.get("checkout_mode") in ("experimental", "chrome_auto") and config.get("auto_checkout"):
+        if config.get("stock_action", "notify") == "dry_run_bag":
+            initiated = launch_nonpaying_stock_dry_run(top, config)
+        elif config.get("checkout_mode") in ("experimental", "chrome_auto") and config.get("auto_checkout"):
             initiated = launch_checkout_bot(top, config)
         opened = False
-        if config["open_browser"] and not initiated:
+        # In stock-triggered dry-run mode, NEVER open a second product tab:
+        # an existing iPhone is already in the bag.
+        if config.get("stock_action", "notify") != "dry_run_bag" and config["open_browser"] and not initiated:
             opened = open_from_config(buy_url, config)
         if delivered or opened or initiated:
             state["status"] = updated
