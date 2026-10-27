@@ -95,7 +95,13 @@ async page => {
           found.push({index, readable:false, checked:false});
           return;
         }
-        found.push({index, readable:true, checked:input.checked === true});
+        const inputs = [...document.querySelectorAll('input[type="radio"], input[type="checkbox"]')];
+        const inputIndex = inputs.indexOf(input);
+        found.push({
+          index, inputIndex, readable:inputIndex >= 0,
+          checked:input.checked === true,
+          disabled:!!(input.disabled || input.closest?.('[inert],[aria-disabled="true"],fieldset[disabled]'))
+        });
       });
       if (found.length !== 1) return {kind:found.length?'ambiguous':'missing'};
       return {kind:found[0].readable?'found':'unverifiable', ...found[0]};
@@ -144,13 +150,27 @@ async page => {
       if (state.kind === 'ambiguous') throw Error('no_applecare_control_ambiguous');
       if (state.kind === 'unverifiable') throw Error('no_applecare_selection_unverified');
       if (state.kind === 'found') {
+        if (state.disabled) throw Error('no_applecare_option_disabled');
         if (state.checked) {
           operation = 'care_confirm_no_challenge';
           await stopOnChallenge();
           return true;
         }
-        // Normal visible clicks only. No force:true, JS-dispatched click,
-        // CAPTCHA bypass, or a click on a different AppleCare option.
+        // First try the real associated native input. Playwright's check()
+        // performs normal actionability checks and verifies the input itself.
+        // Do not force clicks, dispatch synthetic DOM events, or modify React state.
+        if (Number.isInteger(state.inputIndex) && state.inputIndex >= 0) {
+          operation = 'care_input_check';
+          const input = page.locator('input[type="radio"],input[type="checkbox"]').nth(state.inputIndex);
+          try {
+            await input.check({timeout:3500});
+            if (await verifySelected(state.index)) return true;
+          } catch (error) {
+            operation = 'care_input_unavailable';
+            await stopOnChallenge();
+          }
+        }
+        // Fall back only to ordinary visible clicks on the exact no-care UI.
         operation = 'care_find_exact_text';
         const text = page.getByText(/^\s*No AppleCare(?:\+)? coverage\s*$/i, {exact:true});
         const count = await text.count();
@@ -296,7 +316,8 @@ async page => {
       'order_total_not_proven','price_above_cap','zip_entry_missing',
       'pickup_store_missing','pickup_time_selector_missing','review_navigation_missing',
       'final_order_button_missing','no_applecare_option_missing',
-      'no_applecare_selection_unverified','no_applecare_click_failed',
+      'no_applecare_selection_unverified','no_applecare_option_disabled',
+      'no_applecare_click_failed',
       'no_applecare_control_ambiguous',
       'no_applecare_not_verified',
       'unexpected_applecare'
