@@ -151,6 +151,22 @@ The experimental checkout code on `main` is **not validated in Apple's live stor
 
 A completed Apple order cannot be inferred from clicking a button; use Apple's own confirmation. The one-order persistent lock is essential even if checkout crashes or an outcome remains uncertain. An already existing delivery order may result in a second phone purchase.
 
+## October 26: observed AppleCare choice and next nonpaying test
+
+The user's read-only Chrome inspector identified an actual `label` and `input` called **No AppleCare coverage**. Paid options labeled **AppleCare+ with Theft and Loss** and **AppleCare One** were also present. The earlier dry run stopped at `no_applecare_option_missing` because its immediate selection check could not see a matching control.
+
+The Chrome checkout script now waits up to **12 seconds** for the exact no-coverage label or radio to render, chooses **only** that option, and verifies that its linked radio/checkbox is **checked**. It refuses to proceed if the choice is absent or does not register. The final order summary must explicitly show **No AppleCare coverage**, without a paid AppleCare line. Nothing in the checkout dry-run submits payment, and none of this has been proven against a live accepted purchase.
+
+After checking your Apple bag for old test items, pulling updates, and ensuring the existing Chrome extension connection is active, you can rerun:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
+```
+
+Keep `AUTO_CHECKOUT=false`. The dry run may still stop on a later unrecognized Apple control; the reported stage/code should guide further nonpaying diagnostics. Avoid sharing any account data or Chrome session tokens.
+
 ## Troubleshoot a missing No AppleCare+ option (read-only)
 
 If `dry-run-chrome` stops with `Stopped at applecare: no_applecare_option_missing`, the page did **not** expose the exact selection label the automation expected. That does **not** mean AppleCare is compulsory; the option may be worded differently or presented later.
