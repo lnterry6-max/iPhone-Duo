@@ -101,10 +101,12 @@ async page => {
       if (!s.includes(required)) throw Error('order_mismatch');
     }
     if (/512gb|1tb|2tb/.test(s)) throw Error('wrong_storage');
-    // Refuse summaries that explicitly show an additional AppleCare plan.
-    // A generic AppleCare upsell is not proof of an order, so be conservative.
-    if (/applecare\s*(?:\+|one).*?(?:\$\s*\d|per month|monthly|annual)/i.test(s)
-        && !/no applecare\+? coverage/i.test(s)) throw Error('unexpected_applecare');
+    // Only accept a final order summary explicitly documenting no extra
+    // AppleCare coverage; never mistake a paid line for a harmless upsell.
+    if (!/no applecare(?:\+)? coverage/.test(s)) throw Error('no_applecare_not_verified');
+    if (/applecare\s*(?:\+|one).*?(?:\$\s*\d|per month|monthly|annual)/i.test(s)) {
+      throw Error('unexpected_applecare');
+    }
     if (!/(?:quantity|qty)\s*:?\s*1\b/.test(s)) throw Error('quantity_not_proven');
     if (/(?:quantity|qty)\s*:?\s*[2-9]/.test(s)) throw Error('wrong_quantity');
     if (!/\b(?:oct(?:ober)?\.?\s+27(?:,?\s+2026)?|10\/27(?:\/2026)?|2026-10-27)\b/.test(s)) throw Error('wrong_pickup_date');
@@ -202,7 +204,8 @@ async page => {
       'order_total_not_proven','price_above_cap','zip_entry_missing',
       'pickup_store_missing','pickup_time_selector_missing','review_navigation_missing',
       'final_order_button_missing','no_applecare_option_missing',
-      'no_applecare_selection_unverified','unexpected_applecare'
+      'no_applecare_selection_unverified','no_applecare_not_verified',
+      'unexpected_applecare'
     ]);
     return fail(known.has(error?.message) ? error.message : 'checkout_interface_unrecognized');
   }
