@@ -273,6 +273,33 @@ This opens the **existing bag** in attached Chrome, confirms the Star White 256G
 
 The screenshot showed **pickup unavailable at Blackstone Valley** at the time, but that does not confirm status for Natick or other allowed stores. Avoid assuming that a bag item reserves store inventory or that the requested next-day appointment will be offered. Continue to keep `AUTO_CHECKOUT=false` until checkout has been safely verified in the real Apple Store.
 
+## Payment-readiness preflight (October 26, 2026)
+
+The repo now has a **no-payment, no-inventory-request** readiness check:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 checkout_bot.py preflight
+```
+
+It reports the exact Duo configuration, approved stores, October 27 3/4 PM deadline, one-order lock, Chrome connection, local authorization and selected action mode. It explicitly reports the two unverified prerequisites: **fresh Apple stock** and **verified final checkout summary showing the exact pickup store/date/time/price**. **A passing GitHub test suite or simulated restock cannot replace these checks.** The command never enables checkout or accesses payment information.
+
+**To run the safest usable monitor tonight** (opens Chrome when real eligible stock is detected, then you complete purchase yourself), keep your local `.env` set to:
+
+```dotenv
+CHECKOUT_MODE=chrome_extension
+STOCK_ACTION=notify
+BROWSER_APP=Google Chrome
+OPEN_BROWSER=true
+AUTO_CHECKOUT=false
+POLL_SECONDS=180
+```
+
+Then use `python3 duo_monitor.py watch`. The alert feed is still subject to Apple's HTTP 541 refusal. The watcher backs off and exits after three consecutive failed checks, rather than silently claiming to monitor stock or bypassing security checks. **If 541 continues, you must rely on Apple's own product availability display or another independent legitimate restock alert; no reliable automatic purchase is possible from a failed feed.**
+
+**Do not switch `CHECKOUT_MODE=chrome_auto` and `AUTO_CHECKOUT=true` solely based on simulated tests.** The checkout bot's final payment and the October 27 appointment have not been successfully validated. The existing delivery order may create an unwanted second purchase, and the persistent one-order lock must not be reset without verifying Apple Orders. Never put Apple credentials, verification codes, payment information, browser tokens or cookies in GitHub.
+
 ## Stock-triggered checkout testing (safe and nonpaying)
 
 The Apple API stock monitor can now **automatically launch one checkout dry run when a qualifying 256GB Duo is detected as in stock**. This uses the same approved five-store list and October 27 3:00/4:00 PM time-window constraints as the original monitor. It **never presses Place Order** in this mode. **Apple's inventory endpoint has returned HTTP 541 in practice**, so this is *not* a guaranteed or currently verified live restock detector; it will stop after repeated failures rather than evading Apple's verification.
