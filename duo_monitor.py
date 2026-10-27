@@ -382,7 +382,7 @@ def launch_checkout_bot(stock: Stock, config: dict[str, Any]) -> bool:
         return False
 
 
-def launch_nonpaying_stock_dry_run(stock: Stock, config: dict[str, Any]) -> bool:
+def launch_nonpaying_stock_dry_run(stock: Stock, config: dict[str, Any], *, simulation: bool = False) -> bool:
     """Run exactly one dry-run on real eligible Duo stock; NEVER submit a payment.
 
     Uses the existing bag without adding duplicate phones. A durable local
@@ -411,7 +411,7 @@ def launch_nonpaying_stock_dry_run(stock: Stock, config: dict[str, Any]) -> bool
         return False
     state_dir = Path(config["state_path"]).parent
     state_dir.mkdir(parents=True, exist_ok=True)
-    claim_path = state_dir / "stock-dry-run-claimed.json"
+    claim_path = state_dir / ("simulated-stock-dry-run-claimed.json" if simulation else "stock-dry-run-claimed.json")
     try:
         # O_EXCL protects against concurrent scans or duplicate alerts.
         fd = os.open(claim_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -547,7 +547,7 @@ def simulate_stock_trigger(config: dict[str, Any], sku: str, store: str) -> bool
         LOG.info("STOCK_ACTION=notify: stock alert would be generated; NO browser or purchase activity")
         return True
     LOG.info("Testing local one-time NONPAYING checkout trigger using existing bag")
-    return launch_nonpaying_stock_dry_run(stock, config)
+    return launch_nonpaying_stock_dry_run(stock, config, simulation=True)
 
 
 def doctor(config: dict[str, Any]) -> bool:
