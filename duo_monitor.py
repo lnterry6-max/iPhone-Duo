@@ -96,8 +96,8 @@ def get_config() -> dict[str, Any]:
     if preferred not in ("Star White", "Night Sky"):
         raise ValueError("PREFERRED_COLOR must be Star White or Night Sky")
     checkout_mode = os.getenv("CHECKOUT_MODE", "browser_handoff").strip().lower()
-    if checkout_mode not in ("browser_handoff", "experimental"):
-        raise ValueError("CHECKOUT_MODE must be browser_handoff or experimental")
+    if checkout_mode not in ("browser_handoff", "chrome_extension", "experimental"):
+        raise ValueError("CHECKOUT_MODE must be browser_handoff, chrome_extension, or experimental")
     browser_app = os.getenv("BROWSER_APP", "Safari").strip()
     if browser_app not in ("Safari", "Google Chrome", "Default"):
         raise ValueError("BROWSER_APP must be Safari, Google Chrome, or Default")
@@ -286,6 +286,50 @@ def open_checkout_page(url: str, browser_app: str = "Safari") -> bool:
         return False
 
 
+def open_in_connected_chrome(url: str, *, cli_path: Path | None = None) -> bool:
+    """Open an allowlisted Apple product in the user's *already attached* Chrome.
+
+    Uses the official Playwright CLI Chrome-extension session. No shell,
+    screenshots, snapshots, account credentials, cart edits, or payment actions.
+    Never runs `open`, which would launch another browser profile.
+    """
+    if url not in BUY_URLS.values():
+        LOG.error("Chrome handoff refused: not an approved 256GB Apple product URL")
+        return False
+    if sys.platform != "darwin" or os.getenv("GITHUB_ACTIONS", "").lower() == "true":
+        LOG.error("Connected Chrome handoff only supported on the local Mac")
+        return False
+    binary = cli_path or Path.home() / ".local" / "bin" / "playwright-cli"
+    if not binary.is_file():
+        LOG.warning("Playwright CLI not installed at %s", binary)
+        return False
+    try:
+        result = subprocess.run(
+            [str(binary), "-s=chrome", "tab-new", url],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=25, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        LOG.warning("Chrome extension handoff unavailable (%s)", type(exc).__name__)
+        return False
+    if result.returncode != 0:
+        # Do not log CLI output: it may include tab names or private URLs.
+        LOG.warning("Connected Chrome session unavailable; reattach with: playwright-cli attach --extension=chrome")
+        return False
+    LOG.info("Opened approved 256GB Apple product in attached Chrome; checkout remains manual")
+    return True
+
+
+def open_from_config(url: str, config: dict[str, Any]) -> bool:
+    """Try connected Chrome if chosen; safely fall back to ordinary Chrome."""
+    if config.get("checkout_mode") == "chrome_extension":
+        if open_in_connected_chrome(url):
+            return True
+        LOG.warning("Chrome session not attached; opening the product URL in ordinary Chrome")
+        return open_checkout_page(url, "Google Chrome")
+    return open_checkout_page(url, config.get("browser_app", "Safari"))
+
+
 def launch_checkout_bot(stock: Stock, config: dict[str, Any]) -> bool:
     """Only local, opt-in checkout attempts; never from GitHub-hosted runners."""
     if os.getenv("GITHUB_ACTIONS", "").lower() == "true":
@@ -381,7 +425,7 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
             initiated = launch_checkout_bot(top, config)
         opened = False
         if config["open_browser"] and not initiated:
-            opened = open_checkout_page(buy_url, config.get("browser_app", "Safari"))
+            opened = open_from_config(buy_url, config)
         if delivered or opened or initiated:
             state["status"] = updated
         else:
@@ -409,9 +453,9 @@ def main() -> int:
     try:
         config = get_config()
         if args.command == "prepare-checkout":
-            LOG.info("Opening Apple Store in your normal %s browser.", config["browser_app"])
-            LOG.info("Finish all authentication and checkout directly in your browser; nothing is autofilled or purchased by this command.")
-            return 0 if open_checkout_page(BUY_URLS["MK1E4LL/A"], config["browser_app"]) else 1
+            LOG.info("Opening Apple Store for safe browser handoff (mode %s).", config["checkout_mode"])
+            LOG.info("No order is placed; use Apple checkout directly in your browser.")
+            return 0 if open_from_config(BUY_URLS["MK1E4LL/A"], config) else 1
         if args.command == "test-alert":
             good = send_alert("This is a test alert, NOT actual inventory. Checkout is always manual.",
                               "Duo monitor test", BUY_URLS["MK1E4LL/A"], config)
