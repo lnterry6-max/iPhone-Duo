@@ -6,7 +6,7 @@ const start=source.indexOf("  const addProductToBag = async () => {");
 const end=source.indexOf("  const openBagCheckout = async () => {",start);
 assert.ok(start>0 && end>start);
 const cfg={url:"https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-star-white-unlocked"};
-const run=new Function("page","stopOnChallenge","cfg",'let operation="start";\n'+source.slice(start,end)+'\nreturn addProductToBag();');
+const run=new Function("page","stopOnChallenge","cfg",'let operation="start"; const appleHost = url => { try { const h=new URL(url).hostname; return h==="apple.com"||h.endsWith(".apple.com"); } catch { return false; }};\n'+source.slice(start,end)+'\nreturn addProductToBag();');
 function fixture({control="button",label="Add to Bag",delay=0,disabled=false,duplicate=false,continueFirst=false,
                  changed=false,challenge=false}={}){
  let ticks=0,clicks=0,continues=0;
