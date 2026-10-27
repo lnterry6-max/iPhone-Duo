@@ -120,8 +120,8 @@ def get_config() -> dict[str, Any]:
     if preferred not in ("Star White", "Night Sky"):
         raise ValueError("PREFERRED_COLOR must be Star White or Night Sky")
     checkout_mode = os.getenv("CHECKOUT_MODE", "browser_handoff").strip().lower()
-    if checkout_mode not in ("browser_handoff", "chrome_extension", "experimental"):
-        raise ValueError("CHECKOUT_MODE must be browser_handoff, chrome_extension, or experimental")
+    if checkout_mode not in ("browser_handoff", "chrome_extension", "experimental", "chrome_auto"):
+        raise ValueError("CHECKOUT_MODE must be browser_handoff, chrome_extension, chrome_auto, or experimental")
     browser_app = os.getenv("BROWSER_APP", "Safari").strip()
     if browser_app not in ("Safari", "Google Chrome", "Default"):
         raise ValueError("BROWSER_APP must be Safari, Google Chrome, or Default")
@@ -137,7 +137,7 @@ def get_config() -> dict[str, Any]:
         "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         "open_browser": os.getenv("OPEN_BROWSER", "false").lower() in ("true", "1", "yes"),
-        "auto_checkout": checkout_mode == "experimental" and os.getenv("AUTO_CHECKOUT", "false").lower() in ("true", "1", "yes"),
+        "auto_checkout": checkout_mode in ("experimental", "chrome_auto") and os.getenv("AUTO_CHECKOUT", "false").lower() in ("true", "1", "yes"),
     }
 
 
@@ -346,7 +346,7 @@ def open_in_connected_chrome(url: str, *, cli_path: Path | None = None) -> bool:
 
 def open_from_config(url: str, config: dict[str, Any]) -> bool:
     """Try connected Chrome if chosen; safely fall back to ordinary Chrome."""
-    if config.get("checkout_mode") == "chrome_extension":
+    if config.get("checkout_mode") in ("chrome_extension", "chrome_auto"):
         if open_in_connected_chrome(url):
             return True
         LOG.warning("Chrome session not attached; opening the product URL in ordinary Chrome")
@@ -366,8 +366,9 @@ def launch_checkout_bot(stock: Stock, config: dict[str, Any]) -> bool:
     try:
         state_dir = Path(config["state_path"]).parent
         state_dir.mkdir(parents=True, exist_ok=True)
+        command = "attempt-chrome" if config.get("checkout_mode") == "chrome_auto" else "attempt"
         with (state_dir / "checkout-bot.log").open("a", encoding="utf-8") as log:
-            subprocess.Popen([sys.executable, str(script), "attempt", "--sku", stock.sku,
+            subprocess.Popen([sys.executable, str(script), command, "--sku", stock.sku,
                               "--store-id", stock.store_id, "--store-name", stock.store,
                               "--zip-code", stock.zip_code], stdin=subprocess.DEVNULL,
                              stdout=log, stderr=log, start_new_session=True, cwd=str(script.parent))
@@ -445,7 +446,7 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
         LOG.warning("NEW STOCK: %s", message.replace("\n", " | "))
         delivered = send_alert(message, "iPhone Duo 256GB IN STOCK", buy_url, config)
         initiated = False
-        if config.get("checkout_mode") == "experimental" and config.get("auto_checkout"):
+        if config.get("checkout_mode") in ("experimental", "chrome_auto") and config.get("auto_checkout"):
             initiated = launch_checkout_bot(top, config)
         opened = False
         if config["open_browser"] and not initiated:
