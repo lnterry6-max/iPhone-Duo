@@ -61,6 +61,55 @@ class ProductTests(unittest.TestCase):
                 checkout.assert_not_called()
                 handoff.assert_called_once()
 
+    def test_chrome_extension_mode_never_enables_auto_checkout(self):
+        with patch.dict("os.environ", {"CHECKOUT_MODE": "chrome_extension", "AUTO_CHECKOUT": "true",
+                                        "ZIP_CODES": "01609", "POLL_SECONDS": "20"}):
+            config = m.get_config()
+            self.assertEqual(config["checkout_mode"], "chrome_extension")
+            self.assertFalse(config["auto_checkout"])
+
+    def test_connected_chrome_opens_approved_url_in_existing_session(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temp:
+            binary = Path(temp) / "playwright-cli"
+            binary.touch()
+            with patch.object(m.sys, "platform", "darwin"), \
+                 patch.object(m.subprocess, "run", return_value=Mock(returncode=0)) as run:
+                url = m.BUY_URLS["MK1F4LL/A"]
+                self.assertTrue(m.open_in_connected_chrome(url, cli_path=binary))
+                self.assertEqual(run.call_args.args[0], [str(binary), "-s=chrome", "tab-new", url])
+
+    def test_connected_chrome_rejects_unapproved_url_without_launching(self):
+        with patch.object(m.subprocess, "run") as run:
+            self.assertFalse(m.open_in_connected_chrome("https://example.com/checkout"))
+            self.assertFalse(m.open_in_connected_chrome("https://www.apple.com/shop/bag"))
+            run.assert_not_called()
+
+    def test_extension_unavailable_falls_back_to_normal_chrome(self):
+        with patch.object(m, "open_in_connected_chrome", return_value=False), \
+             patch.object(m, "open_checkout_page", return_value=True) as fallback:
+            self.assertTrue(m.open_from_config(m.BUY_URLS["MK1E4LL/A"],
+                                              {"checkout_mode": "chrome_extension", "browser_app": "Safari"}))
+            fallback.assert_called_once_with(m.BUY_URLS["MK1E4LL/A"], "Google Chrome")
+
+    def test_chrome_extension_handoff_never_launches_checkout_bot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config = {"zip_codes": ["01609"], "period": 20, "preferred": "Star White",
+                      "state_path": Path(temp) / "stock.json", "ntfy_topic": "",
+                      "ntfy_server": "https://ntfy.sh", "telegram_token": "",
+                      "telegram_chat_id": "", "open_browser": True,
+                      "browser_app": "Google Chrome", "checkout_mode": "chrome_extension",
+                      "auto_checkout": True}
+            with patch.object(m, "PURCHASE_LOCK", Path(temp) / "no-lock.json"), \
+                 patch.object(m, "fetch_inventory", return_value=sample("available")), \
+                 patch.object(m, "send_alert", return_value=False), \
+                 patch.object(m, "eligible_pickup_hours", return_value={15: True}), \
+                 patch.object(m, "launch_checkout_bot") as buy, \
+                 patch.object(m, "open_from_config", return_value=True) as handoff:
+                self.assertTrue(m.check(config))
+                buy.assert_not_called()
+                handoff.assert_called_once_with(m.BUY_URLS["MK1E4LL/A"], config)
+
     def test_only_256gb_skus(self):
         self.assertEqual(set(m.PRODUCTS), {"MK1E4LL/A", "MK1F4LL/A"})
         self.assertIn("parts.0=MK1E4LL%2FA", m.stock_url("01609"))
