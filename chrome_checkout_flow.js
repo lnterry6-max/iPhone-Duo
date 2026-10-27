@@ -385,6 +385,17 @@ async page => {
       if (!s.includes(required)) throw Error('order_mismatch');
     }
     if (/512gb|1tb|2tb/.test(s)) throw Error('wrong_storage');
+    // A review with both colors or multiple possible pickup stores is NOT
+    // an unambiguous order. Strictly fail closed before any payment click.
+    const otherColor = color === 'star white' ? 'night sky' : 'star white';
+    if (s.includes(otherColor)) throw Error('conflicting_product_color');
+    const otherStores = allowedStores.filter(name =>
+      name.toLowerCase() !== cfg.store.toLowerCase() &&
+      s.includes(name.toLowerCase()));
+    if (otherStores.length) throw Error('conflicting_pickup_store');
+    // An additional Apple device or multiple unit lines should never be
+    // silently accepted for this single-phone purchase.
+    if (/\b(?:ipad|airpods|apple watch|macbook|imac)\b/i.test(s)) throw Error('unexpected_other_device');
     // Only accept a final order summary explicitly documenting no extra
     // AppleCare coverage; never mistake a paid line for a harmless upsell.
     if (!/no applecare(?:\+)? coverage/.test(s)) throw Error('no_applecare_not_verified');
@@ -393,6 +404,9 @@ async page => {
     }
     if (!/(?:quantity|qty)\s*:?\s*1\b/.test(s)) throw Error('quantity_not_proven');
     if (/(?:quantity|qty)\s*:?\s*[2-9]/.test(s)) throw Error('wrong_quantity');
+    if ([...s.matchAll(/(?:quantity|qty)\s*:?\s*\d+\b/g)].length !== 1) {
+      throw Error('quantity_not_unique');
+    }
     if (!/\b(?:oct(?:ober)?\.?\s+27(?:,?\s+2026)?|10\/27(?:\/2026)?|2026-10-27)\b/.test(s)) throw Error('wrong_pickup_date');
     if (!/\b(?:pick\s*up|pickup)\b/.test(s)) throw Error('not_pickup');
     const hours = [...s.matchAll(/(?<!\d)([34]):00\s*p\.?m\.?(?!\w)/g)].map(m => Number(m[1]) + 12);
@@ -531,7 +545,8 @@ async page => {
       'product_continue_ambiguous','product_add_to_bag_missing_after_continue',
       'product_add_to_bag_missing',
       'expected_control_missing',
-      'final_review_missing','order_mismatch','wrong_storage','quantity_not_proven',
+      'final_review_missing','order_mismatch','wrong_storage','conflicting_product_color',
+      'conflicting_pickup_store','unexpected_other_device','quantity_not_proven','quantity_not_unique',
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
       'order_total_not_proven','price_above_cap','zip_entry_missing',
       'zip_entry_ambiguous','pickup_no_stores_available','pickup_requested_store_unavailable',
