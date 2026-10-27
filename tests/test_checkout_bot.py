@@ -1,7 +1,7 @@
 import unittest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import checkout_bot as bot
 from checkout_bot import CheckoutError, summary_ok, validate_auth
 
@@ -43,6 +43,65 @@ class LoginSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(bot, "LOGIN_CONFIRMATION", Path(tmp) / "no-confirmed-login.json"):
             with self.assertRaises(CheckoutError):
                 bot.require_verified_login()
+
+
+
+class ChromeAutomationTests(unittest.TestCase):
+    def test_mode_requires_separate_opt_in(self):
+        with patch.object(bot, "get_config", return_value={"checkout_mode": "browser_handoff"}), \
+             patch.object(bot, "require_verified_login") as login:
+            with self.assertRaises(CheckoutError):
+                bot.arm(Mock(max_total=2200, hours=4))
+            login.assert_not_called()
+
+    def test_chrome_autopurchase_arming_requires_attached_browser(self):
+        with patch.object(bot, "get_config", return_value={"checkout_mode": "chrome_auto"}), \
+             patch.object(bot, "connected_chrome_ready", return_value=False):
+            with self.assertRaises(CheckoutError):
+                bot.arm(Mock(max_total=2200, hours=4))
+
+    def test_chrome_mode_arm_stores_its_mode_and_limit(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(bot, "AUTH", Path(tmp) / "authorization.json"), \
+             patch.object(bot, "PURCHASE_LOCK", Path(tmp) / "missing-lock.json"), \
+             patch.object(bot, "get_config", return_value={"checkout_mode": "chrome_auto"}), \
+             patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch("builtins.input", return_value="BUY ONE DUO"):
+            bot.arm(Mock(max_total=2200, hours=4))
+            saved = bot.json.loads((Path(tmp) / "authorization.json").read_text())
+            self.assertEqual(saved["checkout_mode"], "chrome_auto")
+            self.assertEqual(saved["quantity"], 1)
+            self.assertEqual(saved["max_total_usd"], 2200)
+
+    def test_chrome_checkout_flow_dry_run_does_not_request_submission(self):
+        from duo_monitor import Stock
+        stock = Stock("Apple Natick", "R002", "MK1E4LL/A", "Star White - 256GB", "in_stock", "01609")
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(bot, "PROFILE_ROOT", Path(tmp)), \
+             patch.object(bot, "chrome_cli", return_value=Path(tmp) / "playwright-cli"), \
+             patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run", side_effect=[
+                 Mock(returncode=0),
+                 Mock(returncode=0, stdout='DUO_AUTOMATION_RESULT={"status":"review_verified","total_usd":2125.45}')
+             ]) as run:
+            output = bot.chrome_checkout_flow(stock, 2200, [15, 16], submit_order=False)
+            self.assertEqual(output["status"], "review_verified")
+            cmd = run.call_args_list[1].args[0]
+            self.assertEqual(cmd[:4], [str(Path(tmp) / "playwright-cli"), "-s=chrome", "--raw", "run-code"])
+            self.assertFalse(list(Path(tmp).glob("chrome-flow-*.js")))
+
+    def test_unexpected_cli_output_fails_closed(self):
+        from duo_monitor import Stock
+        stock = Stock("Apple Natick", "R002", "MK1E4LL/A", "Star White - 256GB", "in_stock", "01609")
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(bot, "PROFILE_ROOT", Path(tmp)), \
+             patch.object(bot, "chrome_cli", return_value=Path(tmp) / "playwright-cli"), \
+             patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run", side_effect=[
+                 Mock(returncode=0), Mock(returncode=0, stdout="unexpected output")
+             ]):
+            with self.assertRaises(CheckoutError):
+                bot.chrome_checkout_flow(stock, 2200, [15], submit_order=True)
 
 
 
