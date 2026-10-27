@@ -21,9 +21,33 @@ async page => {
     } catch { return false; }
   };
   const stopOnChallenge = async () => {
-    if (!appleHost(page.url())) throw Error('outside_apple');
-    const text = (await page.locator('body').innerText({timeout: 3500})).toLowerCase();
-    if (/captcha|verify (?:you.?re|that you are) (?:a )?human|unusual traffic|robot check|bot verification/.test(text)) {
+    // Treat a web verification page as an immediate stop. Reading the page
+    // may briefly fail while Apple's configurator re-renders; retry the READ
+    // only, never clicks/navigations, and never treat an unreadable page as OK.
+    let text = null;
+    for (let attempt=0; attempt<3; attempt++) {
+      let url;
+      try {
+        url = page.url();
+      } catch {
+        throw Error('challenge_page_unreadable');
+      }
+      if (!appleHost(url)) throw Error('outside_apple');
+      try {
+        text = await page.locator('body').innerText({timeout:4000});
+        if (typeof text !== 'string' || !text.trim()) throw Error('empty_body');
+        // Reconfirm the browser has not navigated away during extraction.
+        if (!appleHost(page.url())) throw Error('outside_apple');
+        break;
+      } catch (err) {
+        if (err?.message === 'outside_apple') throw err;
+        if (attempt === 2) throw Error('challenge_page_unreadable');
+        // Wait for page hydration; never suppress or solve security checks.
+        await page.waitForTimeout(600);
+      }
+    }
+    const lower = text.toLowerCase();
+    if (/captcha|verify (?:you.?re|that you are) (?:a )?human|unusual traffic|robot check|bot verification/.test(lower)) {
       throw Error('human_verification_required');
     }
   };
@@ -219,7 +243,8 @@ async page => {
   } catch (error) {
     // Never log browser snapshots, account IDs, tokens, cards or private page text.
     const known = new Set([
-      'outside_apple','human_verification_required','expected_control_missing',
+      'outside_apple','human_verification_required','challenge_page_unreadable',
+      'expected_control_missing',
       'final_review_missing','order_mismatch','wrong_storage','quantity_not_proven',
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
       'order_total_not_proven','price_above_cap','zip_entry_missing',
