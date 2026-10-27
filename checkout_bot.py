@@ -411,6 +411,63 @@ def inspect_applecare() -> None:
         print(f"  {item['role']}: {item['label']}")
 
 
+def inspect_test_product() -> None:
+    """Read-only pickup UI labels on a separate ordinary Apple shopping tab.
+
+    Test products can NEVER enter the protected real-money SKU allowlist.
+    This diagnostic does not navigate, select options, add to bag or pay.
+    """
+    if not connected_chrome_ready():
+        raise CheckoutError("Chrome extension disconnected; attach your normal Chrome first")
+    script = Path(__file__).with_name("inspect_test_product.js")
+    if not script.is_file():
+        raise CheckoutError("Read-only product inspector is missing")
+    try:
+        proc = subprocess.run(
+            [str(chrome_cli()), "-s=chrome", "--raw", "run-code", f"--filename={script}"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, timeout=18, check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CheckoutError("Read-only product inspection timed out") from exc
+    if proc.returncode:
+        raise CheckoutError("Unable to inspect selected Chrome tab")
+    raw = proc.stdout.strip()
+    if not raw or len(raw) > 50000:
+        raise CheckoutError("Invalid read-only inspector result")
+    try:
+        wrapped = json.loads(raw)
+        if isinstance(wrapped, str):
+            raw = wrapped
+    except ValueError:
+        pass
+    marker = "DUO_TEST_PICKUP_INSPECT="
+    pos = raw.rfind(marker)
+    if pos < 0:
+        raise CheckoutError("No pickup inspection verdict returned")
+    try:
+        data, _ = json.JSONDecoder().raw_decode(raw[pos + len(marker):].lstrip())
+    except ValueError as exc:
+        raise CheckoutError("Malformed pickup inspector output") from exc
+    if not isinstance(data, dict) or data.get("status") not in (
+        "read_only", "not_product_page", "inspection_failed"):
+        raise CheckoutError("Unsupported pickup inspector response")
+    controls, stores = data.get("controls"), data.get("stores")
+    if not isinstance(controls, list) or len(controls) > 15 or not isinstance(stores, list) or len(stores) > 5:
+        raise CheckoutError("Pickup inspector output exceeded limits")
+    if any(not isinstance(x, str) or len(x) > 120 for x in controls + stores):
+        raise CheckoutError("Unexpected pickup inspector label")
+    if data["status"] != "read_only":
+        print("Select a public apple.com/shop/ product tab, not account or payment, then retry.")
+        return
+    print("READ-ONLY TEST PRODUCT: no cart changes or purchase attempt.")
+    print("Pickup-related UI labels (not proof of a product restock):")
+    for label in controls:
+        print("  " + label)
+    print("Approved store names visible: " + (", ".join(stores) if stores else "none"))
+    print("This test product is never eligible for the iPhone Duo automatic purchase rules.")
+
+
 def parse_chrome_cli_result(output: str) -> dict:
     """Read only our prefixed, structured CLI result; never print raw page data.
 
@@ -659,6 +716,7 @@ def main() -> int:
     a.add_argument("--hours", type=float, default=4)
     commands.add_parser("disarm", help="Revoke purchase authorization")
     commands.add_parser("inspect-applecare", help="Read-only Chrome AppleCare labels; no cart or payment changes")
+    commands.add_parser("inspect-test-product", help="Read-only Chrome pickup UI test for a different Apple product")
     commands.add_parser("reset-purchase-lock", help="Manually unlock only after checking Apple orders")
     t = commands.add_parser("attempt", help="Triggered by the local stock monitor only")
     ca = commands.add_parser("attempt-chrome", help="One-shot live Chrome extension checkout; requires arm")
@@ -689,6 +747,8 @@ def main() -> int:
             arm(args)
         elif args.command == "inspect-applecare":
             inspect_applecare()
+        elif args.command == "inspect-test-product":
+            inspect_test_product()
         elif args.command == "disarm":
             AUTH.unlink(missing_ok=True)
             print("Authorization revoked; any checkout currently running must also be stopped manually")
