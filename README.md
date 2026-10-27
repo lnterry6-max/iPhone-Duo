@@ -29,9 +29,31 @@ This opens the Star White 256GB product page in your selected existing browser; 
 python3 duo_monitor.py watch
 ```
 
-**Browser handoff is intentionally manual checkout.** Chrome's main personal profile cannot safely be attached to Playwright's persistent-context automation, and Playwright does not control your installed Safari browser. A manual tab handoff uses your existing session without copying passwords, cookies, verification codes, or card details. The stock check alone does not confirm the exact October 27 pickup appointment; you must check 3:00/4:00 PM in Apple's checkout.
+**Browser handoff is intentionally manual checkout.** The Python checkout bot's Playwright persistent-context launcher cannot safely reuse Chrome's regular main profile, and it cannot control installed Safari. However, Microsoft's separate Playwright Extension/CLI can connect to Chrome tabs you already have open; see the supported diagnostic approach below. This is not currently wired into the Python checkout bot. A manual tab handoff uses your existing session without copying passwords, cookies, verification codes, or card details. The stock check alone does not confirm the exact October 27 pickup appointment; you must check 3:00/4:00 PM in Apple's checkout.
 
 `CHECKOUT_MODE=browser_handoff` ensures the monitor **never starts the automated purchase process**, even if an old local `AUTO_CHECKOUT=true` value remains. Experimental checkout is a separate, explicitly configured mode; it is not recommended when Apple refuses to complete sign-in in a dedicated browser.
+
+## Optional: officially supported Playwright Extension for regular Chrome
+
+If Chrome for Testing hangs during Apple sign-in, stop using that separate browser. Microsoft's [Playwright Extension](https://chromewebstore.google.com/detail/playwright-extension/mmlmfjhmonkocbjadbfplnigmagldckm) supports connecting to **existing** regular Chrome tabs and their already-authenticated sessions. This is a normal integration, **not a means of bypassing bot verification, Apple two-factor checks, CAPTCHA, or checkout protections**.
+
+For a safe read-only diagnostic on your own Mac:
+
+1. Open your normal Google Chrome and manually sign in at https://www.apple.com/shop/account/home. Confirm the account page actually loads.
+2. Install **Playwright Extension**, published by Microsoft, from the official Chrome Web Store. Give only the permissions you intend; browser-control extensions can access sensitive authenticated pages. Do not share its access/connection token.
+3. Install the official CLI using a current Node.js installation, then attach:
+
+```bash
+npm install -g @playwright/cli@latest
+playwright-cli attach --extension=chrome
+playwright-cli snapshot
+```
+
+The snapshot is for diagnostics only: verify that the CLI can inspect your normal Chrome tab. Do not copy account details, cookies, or tokens into logs or GitHub. If the extension asks to select/authorize the browser session, approve it locally. If Chrome or Apple shows a verification challenge, complete it yourself normally or stop; do not attempt to automate around it.
+
+**Important: the repository's existing Python `checkout_bot.py` does not use the extension**. It still launches a separate Playwright browser profile, so switching to this extension does not automatically enable unattended payment. Attaching Chrome is a potential foundation for a *future* checkout assistant that navigates to an order review and asks you to confirm the final purchase. For now, use `CHECKOUT_MODE=browser_handoff`, `BROWSER_APP=Google Chrome`, `AUTO_CHECKOUT=false`, and test without placing an order.
+
+Microsoft documentation: [Connecting to Browsers](https://playwright.dev/mcp/configuration/browser-extension) and [Playwright CLI](https://playwright.dev/docs/getting-started-cli).
 
 ## Exactly five Apple Stores
 
