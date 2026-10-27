@@ -183,6 +183,37 @@ class ProductTests(unittest.TestCase):
                 self.assertIn("attempt-chrome", command)
                 self.assertNotIn("attempt", command)
 
+    def test_readonly_doctor_never_contacts_apple(self):
+        conf = {"period": 180, "checkout_mode": "chrome_extension", "auto_checkout": False}
+        with tempfile.TemporaryDirectory() as tmp:
+            binpath = Path(tmp) / ".local" / "bin" / "playwright-cli"
+            binpath.parent.mkdir(parents=True, exist_ok=True)
+            binpath.touch()
+            from unittest.mock import Mock
+            with patch.object(m, "PURCHASE_LOCK", Path(tmp) / "missing.json"), \
+                 patch.object(m.Path, "home", return_value=Path(tmp)), \
+                 patch.object(m.sys, "platform", "darwin"), \
+                 patch.dict("os.environ", {"GITHUB_ACTIONS": "false"}), \
+                 patch.object(m, "fetch_inventory") as fetch, \
+                 patch.object(m.subprocess, "run", return_value=Mock(returncode=0)) as cli:
+                self.assertTrue(m.doctor(conf))
+                fetch.assert_not_called()
+                self.assertEqual(cli.call_args.args[0][-1], "tab-list")
+
+    def test_doctor_fails_when_chrome_not_attached(self):
+        conf = {"period": 180, "checkout_mode": "chrome_extension", "auto_checkout": False}
+        with tempfile.TemporaryDirectory() as tmp:
+            binpath = Path(tmp) / ".local" / "bin" / "playwright-cli"
+            binpath.parent.mkdir(parents=True, exist_ok=True)
+            binpath.touch()
+            from unittest.mock import Mock
+            with patch.object(m, "PURCHASE_LOCK", Path(tmp) / "missing.json"), \
+                 patch.object(m.Path, "home", return_value=Path(tmp)), \
+                 patch.object(m.sys, "platform", "darwin"), \
+                 patch.dict("os.environ", {"GITHUB_ACTIONS": "false"}), \
+                 patch.object(m.subprocess, "run", return_value=Mock(returncode=1)):
+                self.assertFalse(m.doctor(conf))
+
     def test_only_256gb_skus(self):
         self.assertEqual(set(m.PRODUCTS), {"MK1E4LL/A", "MK1F4LL/A"})
         self.assertIn("parts.0=MK1E4LL%2FA", m.stock_url("01609"))
