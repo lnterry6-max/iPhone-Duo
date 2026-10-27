@@ -25,7 +25,8 @@ function makeLabel(title,{checked=false,linked=true,extra='',childTitle=false}={
   };
 }
 function fixture({labels=[makeLabel('No AppleCare coverage')],delay=0,
-                  rejectText=false,rejectLabel=false,acceptClick=true,challenge=false}={}){
+                  rejectText=false,rejectLabel=false,rejectInput=false,
+                  acceptClick=true,challenge=false,disabled=false}={}){
   let ticks=0,clicks=0,attemptText=0,attemptLabel=0;
   const norm=str=>String(str).replace(/\s+/g,' ').trim();
   const labelClick=index=>({
@@ -52,16 +53,38 @@ function fixture({labels=[makeLabel('No AppleCare coverage')],delay=0,
       if(acceptClick && labels[index]?.control)labels[index].control.checked=true;
     }
   });
+  const inputs=labels.map(x=>x.control).filter(Boolean);
+  for(const input of inputs){
+    input.disabled=disabled;
+    input.closest=()=>null;
+  }
   const page={
     evaluate:async function(fn){
       const old=globalThis.document;
       globalThis.document={
-        querySelectorAll(selector){assert.equal(selector,'label');return ticks>=delay?labels:[];},
+        querySelectorAll(selector){
+          if(selector==='label')return ticks>=delay?labels:[];
+          if(selector==='input[type="radio"], input[type="checkbox"]')return ticks>=delay?inputs:[];
+          throw Error('unexpected DOM selector '+selector);
+        },
         getElementById(){return null;}
       };
       try{return fn();}finally{globalThis.document=old;}
     },
-    locator(selector){assert.equal(selector,'label');return {nth(index){return labelClick(index)}};},
+    locator(selector){
+      if(selector==='label')return {nth(index){return labelClick(index)}};
+      if(selector==='input[type="radio"],input[type="checkbox"]')return {
+        nth(index){return {
+          async check({timeout}){
+            assert.equal(timeout,3500);
+            if(rejectInput)throw Error('Radio input not actionable');
+            clicks++;
+            if(acceptClick&&inputs[index])inputs[index].checked=true;
+          }
+        }};
+      };
+      throw Error('unexpected Playwright locator: '+selector);
+    },
     getByText(pattern,options){assert.equal(options.exact,true);return textTarget(pattern);},
     waitForTimeout:async ms=>{assert.ok([500,250].includes(ms));ticks++;}
   };
@@ -74,8 +97,9 @@ function fixture({labels=[makeLabel('No AppleCare coverage')],delay=0,
 const matched=fixture();
 assert.equal(await choose(matched.page,matched.guard),true,'exact No AppleCare coverage');
 assert.equal(matched.labels[0].control.checked,true);
-assert.equal(matched.attemptText,1);
+assert.equal(matched.attemptText,0);
 assert.equal(matched.attemptLabel,0);
+assert.equal(matched.clicks,1);
 
 const already=fixture({labels:[makeLabel('No AppleCare coverage',{checked:true})]});
 assert.equal(await choose(already.page,already.guard),true);
@@ -87,9 +111,9 @@ assert.ok(deferred.ticks>=3);
 
 const moreInfo=fixture({labels:[makeLabel('No AppleCare coverage',{extra:'No charge',childTitle:true})]});
 assert.equal(await choose(moreInfo.page,moreInfo.guard),true,'label fallback if text contains details');
-assert.equal(moreInfo.attemptLabel,1);
+assert.equal(moreInfo.attemptLabel,0);
 
-const clickFallback=fixture({rejectText:true});
+const clickFallback=fixture({rejectInput:true,rejectText:true});
 assert.equal(await choose(clickFallback.page,clickFallback.guard),true,'native label click fallback');
 assert.equal(clickFallback.attemptText,1);
 assert.equal(clickFallback.attemptLabel,1);
@@ -105,12 +129,16 @@ assert.equal(duplicates.clicks,0);
 const unlinked=fixture({labels:[makeLabel('No AppleCare coverage',{linked:false})]});
 await assert.rejects(choose(unlinked.page,unlinked.guard),/no_applecare_selection_unverified/);
 
-const failedBoth=fixture({rejectText:true,rejectLabel:true});
+const failedBoth=fixture({rejectInput:true,rejectText:true,rejectLabel:true});
 await assert.rejects(choose(failedBoth.page,failedBoth.guard),/no_applecare_click_failed/);
 assert.equal(failedBoth.clicks,0);
 
-const notSelected=fixture({acceptClick:false});
+const notSelected=fixture({rejectInput:true,acceptClick:false});
 await assert.rejects(choose(notSelected.page,notSelected.guard),/no_applecare_click_failed/);
+
+const disabled=fixture({disabled:true});
+await assert.rejects(choose(disabled.page,disabled.guard),/no_applecare_option_disabled/);
+assert.equal(disabled.clicks,0,'disabled radio must never be activated');
 
 const blocked=fixture({challenge:true});
 await assert.rejects(choose(blocked.page,blocked.guard),/human_verification_required/);
