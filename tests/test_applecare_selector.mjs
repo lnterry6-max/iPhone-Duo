@@ -8,9 +8,9 @@ const begin = source.indexOf('  const chooseNoAppleCare = async () => {');
 const end = source.indexOf('  const findReview = async () => {', begin);
 assert.ok(begin > 0 && end > begin, 'Cannot locate AppleCare code');
 const selectorCode = source.slice(begin, end);
-const choose = new Function('page', 'stopOnChallenge', selectorCode + '\nreturn chooseNoAppleCare();');
+const choose = new Function('page', 'stopOnChallenge', 'let operation="start";\n' + selectorCode + '\nreturn chooseNoAppleCare();');
 
-function fakePage({initialSelected=false, visibleAfter=0, allowSelect=true}={}) {
+function fakePage({initialSelected=false, visibleAfter=0, allowSelect=true, labeled=true, ambiguous=false}={}) {
   let selected = initialSelected;
   let waits = 0, clicks = 0, matcher;
   const label = {
@@ -19,14 +19,18 @@ function fakePage({initialSelected=false, visibleAfter=0, allowSelect=true}={}) 
     evaluate: async fn => fn({control:{get checked(){return selected;}}}),
     click: async () => { clicks++; if (allowSelect) selected = true; }
   };
-  const radio = {count:async()=>0,isVisible:async()=>false};
+  const control = {
+    count: async () => ambiguous ? 2 : ((labeled && waits >= visibleAfter) ? 1 : 0),
+    isChecked: async () => selected,
+    check: async () => {clicks++; if (allowSelect) selected=true;}
+  };
   return {
     page: {
       locator: selector => {
         assert.equal(selector, 'label');
         return {filter:({hasText}) => {matcher=hasText;return label;}};
       },
-      getByRole: () => radio,
+      getByLabel: (pattern) => { matcher=pattern; return control; },
       waitForTimeout: async ms => {assert.equal(ms,500);waits++;}
     },
     get waits(){return waits;},
@@ -53,6 +57,13 @@ assert.equal(already.clicks,0,'already selected option should not be clicked');
 const absent = fakePage({visibleAfter:999});
 assert.equal(await choose(absent.page,stopOnChallenge),false,'absent option must fail closed');
 assert.equal(absent.clicks,0);
+
+const fallback = fakePage({labeled:false});
+assert.equal(await choose(fallback.page,stopOnChallenge),true,'exact label fallback should work');
+assert.equal(fallback.selected,true);
+
+const duplicate = fakePage({ambiguous:true});
+await assert.rejects(choose(duplicate.page,stopOnChallenge), /no_applecare_control_ambiguous/);
 
 const unverified = fakePage({allowSelect:false});
 await assert.rejects(choose(unverified.page,stopOnChallenge), /no_applecare_selection_unverified/);
