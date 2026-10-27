@@ -138,6 +138,51 @@ class ProductTests(unittest.TestCase):
                     m.mark_purchased()
                 self.assertFalse(lock.exists())
 
+    def test_chrome_auto_requires_explicit_boolean_auto_checkout(self):
+        with patch.dict("os.environ", {"CHECKOUT_MODE": "chrome_auto",
+                                        "AUTO_CHECKOUT": "false",
+                                        "POLL_SECONDS": "20",
+                                        "ZIP_CODES": "01609"}):
+            self.assertFalse(m.get_config()["auto_checkout"])
+        with patch.dict("os.environ", {"CHECKOUT_MODE": "chrome_auto",
+                                        "AUTO_CHECKOUT": "true",
+                                        "POLL_SECONDS": "20",
+                                        "ZIP_CODES": "01609"}):
+            self.assertTrue(m.get_config()["auto_checkout"])
+
+    def test_chrome_auto_invokes_one_shot_extension_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state.json"
+            config = {
+                "zip_codes": ["01609"], "period": 20, "preferred": "Star White",
+                "state_path": state, "ntfy_topic": "",
+                "ntfy_server": "https://ntfy.sh", "telegram_token": "",
+                "telegram_chat_id": "", "open_browser": True,
+                "browser_app": "Google Chrome", "checkout_mode": "chrome_auto",
+                "auto_checkout": True
+            }
+            with patch.object(m, "PURCHASE_LOCK", Path(tmp) / "missing-lock.json"), \
+                 patch.object(m, "fetch_inventory", return_value=sample("available")), \
+                 patch.object(m, "send_alert", return_value=False), \
+                 patch.object(m, "eligible_pickup_hours", return_value={15: True}), \
+                 patch.object(m, "launch_checkout_bot", return_value=True) as buy, \
+                 patch.object(m, "open_from_config") as handoff:
+                self.assertTrue(m.check(config))
+                buy.assert_called_once()
+                handoff.assert_not_called()
+
+    def test_launcher_uses_chrome_attempt_in_auto_mode(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as tmp:
+            stock = m.Stock("Apple Natick", "R2", "MK1E4LL/A", "Star White", "in_stock", "01609")
+            conf = {"checkout_mode": "chrome_auto", "state_path": Path(tmp) / "stock.json"}
+            with patch.dict("os.environ", {"GITHUB_ACTIONS": "false"}), \
+                 patch.object(m.subprocess, "Popen", return_value=Mock()) as popen:
+                self.assertTrue(m.launch_checkout_bot(stock, conf))
+                command = popen.call_args.args[0]
+                self.assertIn("attempt-chrome", command)
+                self.assertNotIn("attempt", command)
+
     def test_only_256gb_skus(self):
         self.assertEqual(set(m.PRODUCTS), {"MK1E4LL/A", "MK1F4LL/A"})
         self.assertIn("parts.0=MK1E4LL%2FA", m.stock_url("01609"))
