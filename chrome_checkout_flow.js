@@ -4,7 +4,8 @@ async page => {
   const cfg = __DUO_CONFIG_JSON__;
   let stage = 'start';
   let clickedOrderButton = false;
-  const fail = code => ({status: 'stopped', stage, code, clickedOrderButton});
+  const result = obj => 'DUO_AUTOMATION_RESULT=' + JSON.stringify(obj);
+  const fail = code => result({status: 'stopped', stage, code, clickedOrderButton});
   const allowedUrls = {
     'MK1E4LL/A': 'https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-star-white-unlocked',
     'MK1F4LL/A': 'https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-night-sky-unlocked'
@@ -78,7 +79,7 @@ async page => {
     if (!allowedStores.includes(cfg.store)) return fail('store_rejected');
     if (!Number.isFinite(cfg.max_total_usd) || cfg.max_total_usd < 1999 || cfg.max_total_usd > 3000) return fail('cap_invalid');
     if (!Array.isArray(cfg.valid_hours) || !cfg.valid_hours.length || cfg.valid_hours.some(x=>![15,16].includes(x))) return fail('hours_invalid');
-    if (cfg.quantity !== 1 || cfg.submit_order !== true) return fail('not_armed');
+    if (cfg.quantity !== 1 || typeof cfg.submit_order !== 'boolean') return fail('not_armed');
     stage = 'product';
     await page.goto(cfg.url, {waitUntil:'domcontentloaded', timeout:30000});
     await stopOnChallenge();
@@ -136,6 +137,7 @@ async page => {
     await stopOnChallenge();
     const summary = await findReview();
     const total = validateSummary(summary);
+    if (cfg.submit_order === false) return result({status:'review_verified', stage, total_usd:total});
     stage = 'submit';
     const final = page.getByRole('button', {name:/^(place (?:your )?order|complete purchase)$/i});
     if (await final.count() !== 1 || !await final.isVisible() || !await final.isEnabled()) {
@@ -144,7 +146,7 @@ async page => {
     // Single guarded submission. No retries, even if network/browser errors.
     clickedOrderButton = true; // conservative: treat exceptions as possibly submitted
     await final.click({timeout:5000});
-    return {status:'submitted_unverified', stage, clickedOrderButton, total_usd:total};
+    return result({status:'submitted_unverified', stage, clickedOrderButton, total_usd:total});
   } catch (error) {
     // Never log browser snapshots, account IDs, tokens, cards or private page text.
     const known = new Set([
