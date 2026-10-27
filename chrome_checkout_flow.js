@@ -4,8 +4,9 @@ async page => {
   const cfg = __DUO_CONFIG_JSON__;
   let stage = 'start';
   let clickedOrderButton = false;
+  let operation = 'start';
   const result = obj => 'DUO_AUTOMATION_RESULT=' + JSON.stringify(obj);
-  const fail = code => result({status: 'stopped', stage, code, clickedOrderButton});
+  const fail = code => result({status: 'stopped', stage, step: operation, code, clickedOrderButton});
   const allowedUrls = {
     'MK1E4LL/A': 'https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-star-white-unlocked',
     'MK1F4LL/A': 'https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-night-sky-unlocked'
@@ -43,40 +44,60 @@ async page => {
     if (!await clickUnique(patterns, types)) throw Error('expected_control_missing');
   };
   const chooseNoAppleCare = async () => {
-    // Based on the actual read-only Chrome inspection: Apple's visible label
-    // is "No AppleCare coverage", with an associated input. This is deliberately
-    // strict: never click an offered paid AppleCare+ or AppleCare One plan.
-    const withoutCare = /^\s*No AppleCare(?:\+)? coverage\s*$/i;
-    const labels = page.locator('label').filter({hasText: withoutCare});
-    const radios = page.getByRole('radio', {name: withoutCare});
-    // Apple's product page can render the insurance section after DOMContentLoaded.
-    // Give it at most twelve seconds, but never guess a different choice.
-    for (let attempt = 0; attempt < 24; attempt++) {
+    // The user's read-only browser inspection showed a label and input
+    // named "No AppleCare coverage". Prefer the associated control rather
+    // than inferring state from a wrapper element.
+    const noCareName = /^\s*No AppleCare(?:\+)? coverage\s*$/i;
+    operation = 'care_locate_control';
+    const control = page.getByLabel(noCareName, {exact:true});
+    const labels = page.locator('label').filter({hasText:noCareName});
+    for (let attempt=0; attempt<24; attempt++) {
+      operation = 'care_challenge_check';
       await stopOnChallenge();
-      if (await labels.count() === 1 && await labels.isVisible()) {
-        const label = labels;
-        const selectedBefore = await label.evaluate(node => {
-          const control = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
-          return !!control && control.checked === true;
-        });
-        if (!selectedBefore) await label.click({timeout:4500});
+
+      operation = 'care_count_control';
+      const controlCount = await control.count();
+      if (controlCount > 1) throw Error('no_applecare_control_ambiguous');
+      if (controlCount === 1) {
+        operation = 'care_check_status';
+        const isSelected = await control.isChecked();
+        if (!isSelected) {
+          operation = 'care_select_control';
+          await control.check({timeout:4500});
+        }
+        operation = 'care_verify_control';
+        if (!await control.isChecked()) throw Error('no_applecare_selection_unverified');
+        operation = 'care_confirm_no_challenge';
         await stopOnChallenge();
-        const selectedAfter = await label.evaluate(node => {
-          const control = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
-          return !!control && control.checked === true;
-        });
-        if (!selectedAfter) throw Error('no_applecare_selection_unverified');
         return true;
       }
-      // Accessible-radio fallback for a different but still semantically
-      // correct Apple control; verify its checked state after selection.
-      if (await radios.count() === 1 && await radios.isVisible()) {
-        const radio = radios;
-        if (!await radio.isChecked()) await radio.check({timeout:4500});
+
+      // Fallback for an Apple label with an unexposed accessible name.
+      // Click ONLY the exact no-coverage label and confirm its linked input.
+      operation = 'care_count_label';
+      const labelCount = await labels.count();
+      if (labelCount > 1) throw Error('no_applecare_control_ambiguous');
+      if (labelCount === 1 && await labels.isVisible()) {
+        operation = 'care_fallback_inspect';
+        const before = await labels.evaluate(node => {
+          const input = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
+          return !!input && input.checked === true;
+        });
+        if (!before) {
+          operation = 'care_fallback_click';
+          await labels.click({timeout:4500});
+        }
+        operation = 'care_fallback_verify';
+        const verified = await labels.evaluate(node => {
+          const input = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
+          return !!input && input.checked === true;
+        });
+        if (!verified) throw Error('no_applecare_selection_unverified');
+        operation = 'care_confirm_no_challenge';
         await stopOnChallenge();
-        if (!await radio.isChecked()) throw Error('no_applecare_selection_unverified');
         return true;
       }
+      operation = 'care_wait_for_render';
       await page.waitForTimeout(500);
     }
     return false;
@@ -204,7 +225,8 @@ async page => {
       'order_total_not_proven','price_above_cap','zip_entry_missing',
       'pickup_store_missing','pickup_time_selector_missing','review_navigation_missing',
       'final_order_button_missing','no_applecare_option_missing',
-      'no_applecare_selection_unverified','no_applecare_not_verified',
+      'no_applecare_selection_unverified','no_applecare_control_ambiguous',
+      'no_applecare_not_verified',
       'unexpected_applecare'
     ]);
     return fail(known.has(error?.message) ? error.message : 'checkout_interface_unrecognized');
