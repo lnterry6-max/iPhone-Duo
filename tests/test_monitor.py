@@ -19,6 +19,60 @@ def sample(white="unavailable", black="unavailable"):
     ]}}
 
 
+class InventoryHealthTests(unittest.TestCase):
+    def test_five_zip_success_is_healthy_and_tracks_last_valid_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {"state_path": Path(tmp) / "state.json",
+                      "zip_codes": ["01609", "01760"], "period": 180}
+            results = [m.Stock("Natick", "R001", "MK1E4LL/A",
+                               "Star White — 256GB", "out_of_stock", "01609")]
+            m.record_inventory_health(config, ["01609", "01760"], results, [])
+            data = m.read_state(m.health_path(config))["health"]
+            self.assertEqual(data["condition"], "healthy")
+            self.assertTrue(data["last_valid_inventory_utc"])
+            self.assertEqual(data["out_of_stock"], 1)
+            self.assertTrue(m.show_inventory_health(config))
+
+    def test_short_circuit_first_stock_hit_is_not_five_zip_health(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {"state_path": Path(tmp) / "state.json",
+                      "zip_codes": ["01609", "01760"], "period": 180}
+            results = [m.Stock("Natick", "R001", "MK1E4LL/A",
+                               "Star White — 256GB", "in_stock", "01609")]
+            m.record_inventory_health(config, ["01609"], results, [])
+            data = m.read_state(m.health_path(config))["health"]
+            self.assertEqual(data["condition"], "partial")
+            self.assertEqual(data["checked_zip_codes"], ["01609"])
+            self.assertEqual(data["in_stock"], 1)
+            self.assertFalse(m.show_inventory_health(config))
+
+    def test_541_refusal_cannot_erase_last_valid_inventory_or_report_sold_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {"state_path": Path(tmp) / "state.json",
+                      "zip_codes": ["01609", "01760"], "period": 180}
+            item = m.Stock("Natick", "R001", "MK1E4LL/A",
+                           "Star White — 256GB", "out_of_stock", "01609")
+            m.record_inventory_health(config, ["01609", "01760"], [item], [])
+            past = m.read_state(m.health_path(config))["health"]["last_valid_inventory_utc"]
+            m.record_inventory_health(config, ["01609", "01760"], [],
+                                      ["01609: Apple refused request HTTP 541",
+                                       "01760: Apple refused request HTTP 541"])
+            result = m.read_state(m.health_path(config))["health"]
+            self.assertEqual(result["condition"], "unavailable")
+            self.assertEqual(result["last_valid_inventory_utc"], past)
+            self.assertEqual(result["valid_store_sku_results"], 0)
+            self.assertEqual(len(result["errors"]), 2)
+            self.assertFalse(m.show_inventory_health(config))
+
+    def test_status_never_queries_apple(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {"state_path": Path(tmp) / "state.json",
+                      "zip_codes": ["01609"], "period": 180}
+            with patch.object(m, "fetch_inventory") as network:
+                self.assertFalse(m.show_inventory_health(config))
+                network.assert_not_called()
+
+
 class FastHandoffTests(unittest.TestCase):
     def cfg(self, temp):
         return {
