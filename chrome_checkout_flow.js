@@ -21,35 +21,39 @@ async page => {
     } catch { return false; }
   };
   const stopOnChallenge = async () => {
-    // Treat a web verification page as an immediate stop. Reading the page
-    // may briefly fail while Apple's configurator re-renders; retry the READ
-    // only, never clicks/navigations, and never treat an unreadable page as OK.
-    let text = null;
+    // Page-reading must not depend on transferring the *entire* Apple Store
+    // configurator's text over the extension connection. Inspect DOM text
+    // within Chrome and return only a small allowlisted verdict.
+    // Do not click past human verification or treat unreadable pages as safe.
+    if (typeof page.evaluate !== 'function') throw Error('challenge_eval_unavailable');
     for (let attempt=0; attempt<3; attempt++) {
       let url;
-      try {
-        url = page.url();
-      } catch {
-        throw Error('challenge_page_unreadable');
-      }
+      try { url = page.url(); }
+      catch { throw Error('challenge_page_unreadable'); }
       if (!appleHost(url)) throw Error('outside_apple');
       try {
-        text = await page.locator('body').innerText({timeout:4000});
-        if (typeof text !== 'string' || !text.trim()) throw Error('empty_body');
-        // Reconfirm the browser has not navigated away during extraction.
+        const state = await page.evaluate(() => {
+          const body = document.body;
+          if (!body) return 'unreadable';
+          const content = (document.title || '') + '\n' + (body.innerText || '');
+          if (!content.trim()) return 'unreadable';
+          if (/captcha|verify (?:you.?re|that you are) (?:a )?human|unusual traffic|robot check|bot verification|checking your browser|verify you are a robot/i.test(content)) {
+            return 'human_verification';
+          }
+          return 'readable';
+        });
         if (!appleHost(page.url())) throw Error('outside_apple');
-        break;
+        if (state === 'human_verification') throw Error('human_verification_required');
+        if (state === 'readable') return;
+        if (state !== 'unreadable') throw Error('challenge_page_unreadable');
       } catch (err) {
-        if (err?.message === 'outside_apple') throw err;
+        if (['outside_apple','human_verification_required'].includes(err?.message)) throw err;
         if (attempt === 2) throw Error('challenge_page_unreadable');
-        // Wait for page hydration; never suppress or solve security checks.
-        await page.waitForTimeout(600);
       }
+      // A transient client-side render can clear on retry. Only retry READS.
+      await page.waitForTimeout(600);
     }
-    const lower = text.toLowerCase();
-    if (/captcha|verify (?:you.?re|that you are) (?:a )?human|unusual traffic|robot check|bot verification/.test(lower)) {
-      throw Error('human_verification_required');
-    }
+    throw Error('challenge_page_unreadable');
   };
   const clickUnique = async (patterns, types=['button']) => {
     for (const name of patterns) {
@@ -243,7 +247,7 @@ async page => {
   } catch (error) {
     // Never log browser snapshots, account IDs, tokens, cards or private page text.
     const known = new Set([
-      'outside_apple','human_verification_required','challenge_page_unreadable',
+      'outside_apple','human_verification_required','challenge_page_unreadable','challenge_eval_unavailable',
       'expected_control_missing',
       'final_review_missing','order_mismatch','wrong_storage','quantity_not_proven',
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
