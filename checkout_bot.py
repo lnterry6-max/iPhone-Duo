@@ -453,18 +453,36 @@ def inspect_test_product() -> None:
         "read_only", "not_product_page", "inspection_failed"):
         raise CheckoutError("Unsupported pickup inspector response")
     controls, stores = data.get("controls"), data.get("stores")
+    signals = data.get("storeAvailability", [])
+    pickup_ui = data.get("pickupUiPresent", False)
+    approved = {"The Shops at Blackstone Valley", "Natick", "Boylston Street",
+                "Chestnut Hill", "Legacy Place"}
     if not isinstance(controls, list) or len(controls) > 15 or not isinstance(stores, list) or len(stores) > 5:
         raise CheckoutError("Pickup inspector output exceeded limits")
     if any(not isinstance(x, str) or len(x) > 120 for x in controls + stores):
         raise CheckoutError("Unexpected pickup inspector label")
+    if not set(stores).issubset(approved):
+        raise CheckoutError("Unexpected pickup inspector store")
+    if not isinstance(pickup_ui, bool) or not isinstance(signals, list) or len(signals) > 5:
+        raise CheckoutError("Invalid store availability diagnostic")
+    for item in signals:
+        if (not isinstance(item, dict) or item.get("store") not in approved
+                or item.get("store") not in stores
+                or item.get("availability") not in ("available", "unavailable", "unknown")):
+            raise CheckoutError("Invalid store pickup status")
     if data["status"] != "read_only":
         print("Select a public apple.com/shop/ product tab, not account or payment, then retry.")
         return
     print("READ-ONLY TEST PRODUCT: no cart changes or purchase attempt.")
-    print("Pickup-related UI labels (not proof of a product restock):")
+    print("Pickup-related UI visible: " + ("yes" if pickup_ui else "not detected"))
+    print("Pickup-related interactive controls (not proof of stock):")
     for label in controls:
         print("  " + label)
     print("Approved store names visible: " + (", ".join(stores) if stores else "none"))
+    verdict = {item["store"]: item["availability"] for item in signals}
+    for store in stores:
+        print("  " + store + ": " + verdict.get(store, "unknown")
+              + " (test product only; unconfirmed UI signal)")
     print("This test product is never eligible for the iPhone Duo automatic purchase rules.")
 
 
