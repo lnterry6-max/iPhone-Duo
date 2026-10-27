@@ -349,11 +349,22 @@ def open_in_connected_chrome(url: str, *, cli_path: Path | None = None) -> bool:
 
 
 def open_from_config(url: str, config: dict[str, Any]) -> bool:
-    """Try connected Chrome if chosen; safely fall back to ordinary Chrome."""
-    if config.get("checkout_mode") in ("chrome_extension", "chrome_auto"):
+    """For manual handoff, prefer fast normal Chrome over a CLI round-trip.
+
+    macOS's `open -a Google Chrome <url>` asks the user's already-signed-in
+    Chrome to open an Apple URL without waiting up to 25 seconds for the
+    Playwright extension handshake. No checkout clicks or credential sharing.
+    """
+    mode = config.get("checkout_mode")
+    if mode == "chrome_extension" and config.get("stock_action", "notify") == "notify":
+        if open_checkout_page(url, "Google Chrome"):
+            return True
+        LOG.warning("Normal Chrome launch failed; falling back to connected session")
+        return open_in_connected_chrome(url)
+    if mode in ("chrome_extension", "chrome_auto"):
         if open_in_connected_chrome(url):
             return True
-        LOG.warning("Chrome session not attached; opening the product URL in ordinary Chrome")
+        LOG.warning("Chrome extension unavailable; opening in normal Chrome")
         return open_checkout_page(url, "Google Chrome")
     return open_checkout_page(url, config.get("browser_app", "Safari"))
 
