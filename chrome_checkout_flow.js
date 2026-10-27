@@ -131,39 +131,39 @@ async page => {
     throw Error(usedContinue?'product_add_to_bag_missing_after_continue':'product_add_to_bag_missing');
   };
   const openBagCheckout = async () => {
-    // The Apple bag may render its Checkout control as a link, button,
-    // or asynchronously. Avoid guessing unrelated "Continue" controls or
-    // Apple Pay instant-payment options.
+    // Apple's bag can contain TWO identical standard Check Out buttons
+    // (e.g. above and below the bag) as well as the unrelated Apple Pay one.
+    // Prioritize ONLY an exact ordinary Checkout label, choose its first
+    // visible and enabled instance, and never use Apple Pay/Express Checkout.
     const names = [
       /^check[\s-]?out$/i,
       /^proceed to check[\s-]?out$/i,
       /^continue to check[\s-]?out$/i
     ];
     for (let attempt=0; attempt<20; attempt++) {
-      operation = 'bag_challenge_check';
+      operation='bag_challenge_check';
       await stopOnChallenge();
-      operation = 'bag_find_checkout';
-      const matches=[];
+      operation='bag_find_checkout';
+      // First seek the exact standard Checkout button, then a matching link.
+      // Duplicates of the SAME label are expected on Apple bag pages.
       for (const name of names) {
-        for (const type of ['button','link']) {
-          const candidate=page.getByRole(type,{name});
-          const count=await candidate.count();
-          if (count > 1) throw Error('bag_checkout_ambiguous');
-          if (count === 1 && await candidate.isVisible()
-              && (type==='link' || await candidate.isEnabled())) {
-            matches.push(candidate);
+        for (const role of ['button','link']) {
+          const matched=page.getByRole(role,{name});
+          const count=await matched.count();
+          // Very large matches imply a changed/misread page; stop safely.
+          if (count > 6) throw Error('bag_checkout_ambiguous');
+          for (let i=0;i<count;i++) {
+            const candidate=matched.nth(i);
+            if (!await candidate.isVisible() || !await candidate.isEnabled()) continue;
+            operation='bag_checkout_click';
+            await candidate.click({timeout:6000});
+            operation='bag_checkout_verify';
+            await stopOnChallenge();
+            return true;
           }
         }
       }
-      if (matches.length > 1) throw Error('bag_checkout_ambiguous');
-      if (matches.length === 1) {
-        operation = 'bag_checkout_click';
-        await matches[0].click({timeout:6000});
-        operation = 'bag_checkout_verify';
-        await stopOnChallenge();
-        return true;
-      }
-      operation = 'bag_wait_for_checkout';
+      operation='bag_wait_for_checkout';
       await page.waitForTimeout(500);
     }
     return false;
