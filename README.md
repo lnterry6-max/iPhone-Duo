@@ -107,6 +107,35 @@ Type `ORDER CONFIRMED` when prompted. This creates a durable purchase lock in `~
 
 Chrome extension access is powerful and may include sensitive open tabs. Do not upload the extension connection token, session snapshots, or browser logs to GitHub, and do not bypass any Apple login or human verification checks.
 
+## Recovering from HTTP 541 and testing readiness
+
+If your Mac logs `Apple refused the request (HTTP 541)`, **stop the watcher with Control+C**. This means inventory is unknown, *not* out of stock. Do not use proxy rotation, automated CAPTCHA solvers, account-sharing, or other verification bypasses. Apple's undocumented pickup API is not guaranteed to remain available.
+
+The monitor now limits the watch interval to **at least 120 seconds** when five ZIPs are configured, uses a larger retry delay following errors, and **stops after three consecutive failed inventory rounds** instead of retrying indefinitely. The recommended interval in `.env.example` is **180 seconds**. After `git pull`, edit your existing local `.env` manually:
+
+```dotenv
+POLL_SECONDS=180
+CHECKOUT_MODE=chrome_extension
+BROWSER_APP=Google Chrome
+OPEN_BROWSER=true
+AUTO_CHECKOUT=false
+```
+
+For a **no-network, no-purchase** readiness check of your local browser connection:
+
+```bash
+cd ~/iPhone-Duo
+python3 duo_monitor.py doctor
+```
+
+This checks the named `chrome` extension session without inspecting, saving, or printing private Chrome pages. If disconnected, reconnect using `"$HOME/.local/bin/playwright-cli" attach --extension=chrome`. The doctor does not test Apple inventory or payment acceptance. In particular, **passing unit tests or doctor checks does not make unattended checkout safe to enable**.
+
+### Staged Apple checkout testing
+
+The experimental checkout code on `main` is **not validated in Apple's live store** and may leave a product in the bag while investigating. Never set `CHECKOUT_MODE=chrome_auto` or `AUTO_CHECKOUT=true` simply because browser attachment succeeds. A safe next milestone is a user-supervised, **nonpaying** dry run that can inspect product/configuration, pickup-store choices, and an order review while refusing final order submission. Treat any Apple security/2FA challenge as a stop requiring normal manual verification. Never upload credentials, snapshots, cookies, tokens, payment details, or personal checkout output.
+
+A completed Apple order cannot be inferred from clicking a button; use Apple's own confirmation. The one-order persistent lock is essential even if checkout crashes or an outcome remains uncertain. An already existing delivery order may result in a second phone purchase.
+
 ## Exactly five Apple Stores
 
 Only these five stores are accepted by `pickup_rules.py`. Every other store returned by Apple is ignored for stock events, alerts, and checkout.
