@@ -133,6 +133,45 @@ class ChromeAutomationTests(unittest.TestCase):
 
 
 
+class AppleCareInspectionTests(unittest.TestCase):
+    def test_readonly_diagnostic_parses_only_relevant_controls(self):
+        output = 'DUO_CARE_INSPECT=' + bot.json.dumps({
+            "status": "controls_found",
+            "controls": [
+                {"role": "radio", "label": "No AppleCare+ coverage", "disabled": False},
+                {"role": "button", "label": "AppleCare+ coverage", "disabled": False},
+                {"role": "link", "label": "Account information", "disabled": False}
+            ]
+        })
+        parsed = bot.parse_care_inspection(output)
+        self.assertEqual(parsed["status"], "controls_found")
+        self.assertEqual([p["label"] for p in parsed["controls"]],
+                         ["No AppleCare+ coverage", "AppleCare+ coverage"])
+
+    def test_chrome_quoted_diagnostic(self):
+        output = bot.json.dumps('DUO_CARE_INSPECT={"status":"no_visible_care_controls","controls":[]}')
+        self.assertEqual(bot.parse_care_inspection(output)["controls"], [])
+
+    def test_diagnostic_rejects_raw_account_data(self):
+        with self.assertRaises(CheckoutError):
+            bot.parse_care_inspection("Apple account logged in")
+        with self.assertRaises(CheckoutError):
+            bot.parse_care_inspection('DUO_CARE_INSPECT={"status":"unknown","controls":[]}')
+
+    def test_inspector_runs_with_read_only_script(self):
+        from unittest.mock import Mock
+        with patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run", return_value=Mock(
+                 returncode=0,
+                 stdout='DUO_CARE_INSPECT={"status":"no_visible_care_controls","controls":[]}'
+             )) as run:
+            bot.inspect_applecare()
+            command = run.call_args.args[0]
+            self.assertEqual(command[1:4], ["-s=chrome", "--raw", "run-code"])
+            self.assertTrue(command[4].startswith("--filename="))
+            self.assertIn("inspect_applecare.js", command[4])
+
+
 class SummaryTests(unittest.TestCase):
     def test_exact_model_color_and_pickup(self):
         summary = 'Order Summary | iPhone Duo 256GB Star White | Qty: 1 | Pick up at Apple Natick Tuesday, October 27, 2026 at 3:00 PM | Order Total: $2,125.45'
