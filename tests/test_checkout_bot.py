@@ -162,6 +162,24 @@ class ChromeAutomationTests(unittest.TestCase):
 
 
 
+class TestProductInspectorTests(unittest.TestCase):
+    def test_inspector_readonly_on_selected_tab(self):
+        data = 'DUO_TEST_PICKUP_INSPECT={"status":"read_only","controls":["button: Check availability","link: Pickup"],"stores":["Natick"]}'
+        with patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run", return_value=Mock(returncode=0, stdout=data)) as run, \
+             patch.object(bot, "attempt_chrome") as buying:
+            bot.inspect_test_product()
+            buying.assert_not_called()
+            args = run.call_args.args[0]
+            self.assertEqual(args[1:4], ["-s=chrome","--raw","run-code"])
+            self.assertTrue(args[4].endswith("inspect_test_product.js"))
+
+    def test_inspector_rejects_untrusted_or_malformed_result(self):
+        with patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run", return_value=Mock(returncode=0, stdout="secret account output")):
+            with self.assertRaises(CheckoutError):
+                bot.inspect_test_product()
+
 class AppleCareInspectionTests(unittest.TestCase):
     def test_readonly_diagnostic_parses_only_relevant_controls(self):
         output = 'DUO_CARE_INSPECT=' + bot.json.dumps({
