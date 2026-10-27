@@ -168,6 +168,61 @@ async page => {
     }
     return false;
   };
+  const chooseStorePickup = async () => {
+    // Apple can label the shipping/pickup choice "I'll pick it up".
+    // Match only intentional pickup controls; never "Deliver it".
+    const pickupNames = [
+      /^i['’]ll\s+pick\s+it\s+up$/i,
+      /^i\s+will\s+pick\s+it\s+up$/i,
+      /^i['’]d\s+like\s+to\s+pick\s+it\s+up$/i,
+      /^pick\s*up\s+in[- ]store$/i,
+      /^pick\s*up\s+at\s+an\s+apple\s+store$/i,
+      /^store\s+pick\s*up$/i,
+      /^pick\s*up$/i
+    ];
+    for (let attempt=0;attempt<25;attempt++) {
+      operation='pickup_challenge_check';
+      await stopOnChallenge();
+      operation='pickup_find_choice';
+      for (const name of pickupNames) {
+        for (const role of ['radio','button','link']) {
+          const collection=page.getByRole(role,{name});
+          const count=await collection.count();
+          if (count>4)throw Error('pickup_choice_ambiguous');
+          for(let i=0;i<count;i++){
+            const choice=collection.nth(i);
+            if(!await choice.isVisible() || !await choice.isEnabled())continue;
+            operation='pickup_select_choice';
+            if(role==='radio'){
+              if(!await choice.isChecked())await choice.check({timeout:5500});
+              operation='pickup_verify_choice';
+              if(!await choice.isChecked())throw Error('pickup_choice_not_selected');
+            } else {
+              await choice.click({timeout:5500});
+            }
+            operation='pickup_after_choice';
+            await stopOnChallenge();
+            return true;
+          }
+        }
+      }
+      // Exact-text fallback, only when one matching node exists.
+      operation='pickup_find_text';
+      const exact=page.getByText(/^i['’]ll\s+pick\s+it\s+up$/i,{exact:true});
+      const textCount=await exact.count();
+      if(textCount>1)throw Error('pickup_choice_ambiguous');
+      if(textCount===1 && await exact.isVisible()){
+        operation='pickup_click_text';
+        await exact.click({timeout:5500});
+        operation='pickup_after_choice';
+        await stopOnChallenge();
+        return true;
+      }
+      operation='pickup_wait_for_choice';
+      await page.waitForTimeout(500);
+    }
+    throw Error('pickup_choice_missing');
+  };
   const chooseNoAppleCare = async () => {
     // Read ONLY label text and associated control state inside Chrome.
     // The inspected Apple configurator exposes a <label> containing the
@@ -365,8 +420,7 @@ async page => {
     }
     if (!await openBagCheckout()) throw Error('bag_checkout_control_missing');
     stage = 'pickup';
-    await stopOnChallenge();
-    await requireClick([/^(pick up|pickup|pick up in store)$/i, /pick up at an apple store/i]);
+    await chooseStorePickup();
     const zip = page.getByRole('textbox', {name:/zip|location|postal/i});
     if (await zip.count() !== 1) throw Error('zip_entry_missing');
     await zip.fill(cfg.zip);
@@ -435,7 +489,8 @@ async page => {
       'final_review_missing','order_mismatch','wrong_storage','quantity_not_proven',
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
       'order_total_not_proven','price_above_cap','zip_entry_missing',
-      'pickup_store_missing','pickup_time_selector_missing','review_navigation_missing',
+      'pickup_store_missing','pickup_choice_missing','pickup_choice_ambiguous',
+      'pickup_choice_not_selected','pickup_time_selector_missing','review_navigation_missing',
       'final_order_button_missing','no_applecare_option_missing',
       'no_applecare_selection_unverified','no_applecare_option_disabled',
       'no_applecare_click_failed',
