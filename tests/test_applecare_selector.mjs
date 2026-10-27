@@ -1,96 +1,120 @@
-// Behavioral offline tests for the real AppleCare chooser, using simulated
-// HTML labels and linked radio inputs. No browsing, account or purchases.
+// Tests exercise the real no-AppleCare chooser with simulated DOM and native
+// Playwright-like clicks. No Apple requests, account data or purchases.
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
-const source=fs.readFileSync(new URL('../chrome_checkout_flow.js', import.meta.url),'utf8');
-const start=source.indexOf('  const chooseNoAppleCare = async () => {');
-const end=source.indexOf('  const findReview = async () => {',start);
-assert.ok(start>=0 && end>start,'missing chooser');
-const factory=new Function('page','stopOnChallenge','let operation="test";\n'+source.slice(start,end)+'\nreturn chooseNoAppleCare();');
+const source=fs.readFileSync(new URL('../chrome_checkout_flow.js',import.meta.url),'utf8');
+const a=source.indexOf('  const chooseNoAppleCare = async () => {');
+const b=source.indexOf('  const findReview = async () => {',a);
+assert.ok(a>0 && b>a,'chooser section present');
+const choose=new Function('page','stopOnChallenge','let operation="test";\n'+source.slice(a,b)+'\nreturn chooseNoAppleCare();');
 
-function makeLabel(name,{checked=false,linked=true,extra='',childTitle=false}={}) {
-  const control=linked?{type:'radio',get checked(){return checked;},set checked(value){checked=value;}}:null;
-  const title={innerText:name};
+function makeLabel(title,{checked=false,linked=true,extra='',childTitle=false}={}){
+  const control=linked?{type:'radio',get checked(){return checked;},set checked(v){checked=v;}}:null;
   return {
-    innerText:extra ? name+' '+extra : name,
+    innerText:title+(extra?' '+extra:''),
     control,
     querySelector(){return null;},
-    htmlFor: '',
     getClientRects(){return [1];},
-    querySelectorAll(selector){
-      if(selector==='h1,h2,h3,h4,span,strong,p,div')return childTitle?[title]:[];
+    htmlFor:'',
+    querySelectorAll(selector) {
+      if(selector==='h1,h2,h3,h4,span,strong,p,div')
+        return childTitle?[{innerText:title}]:[];
       return [];
     }
   };
 }
-function fixture({labels=[makeLabel('No AppleCare coverage')],delay=0,acceptClick=true,challenge=false}={}) {
-  let ticks=0,clicked=0,checks=0;
+function fixture({labels=[makeLabel('No AppleCare coverage')],delay=0,
+                  rejectText=false,rejectLabel=false,acceptClick=true,challenge=false}={}){
+  let ticks=0,clicks=0,attemptText=0,attemptLabel=0;
+  const norm=str=>String(str).replace(/\s+/g,' ').trim();
+  const labelClick=index=>({
+    scrollIntoViewIfNeeded:async({timeout})=>{assert.equal(timeout,3500);},
+    click:async({timeout})=>{
+      assert.equal(timeout,4000);
+      attemptLabel++;
+      if(rejectLabel)throw Error('Element is outside viewport');
+      clicks++;
+      if(acceptClick && labels[index]?.control)labels[index].control.checked=true;
+    }
+  });
+  const textTarget=pattern=>({
+    count:async()=>labels.filter(x=>pattern.test(norm(x.innerText))).length,
+    isVisible:async()=>true,
+    scrollIntoViewIfNeeded:async({timeout})=>{assert.equal(timeout,3500);},
+    click:async({timeout})=>{
+      assert.equal(timeout,4000);
+      attemptText++;
+      if(rejectText)throw Error('Element is not stable');
+      const index=labels.findIndex(x=>pattern.test(norm(x.innerText)));
+      assert.ok(index>=0,'exact no-coverage target exists');
+      clicks++;
+      if(acceptClick && labels[index]?.control)labels[index].control.checked=true;
+    }
+  });
   const page={
-    evaluate:async function(fn) {
+    evaluate:async function(fn){
       const old=globalThis.document;
       globalThis.document={
-        querySelectorAll(selector){
-          assert.equal(selector,'label');
-          return ticks>=delay?labels:[];
-        },
+        querySelectorAll(selector){assert.equal(selector,'label');return ticks>=delay?labels:[];},
         getElementById(){return null;}
       };
-      try {return fn();} finally {globalThis.document=old;}
+      try{return fn();}finally{globalThis.document=old;}
     },
-    locator(selector) {
-      assert.equal(selector,'label');
-      return {nth(index){return {
-        async click({timeout}){
-          assert.equal(timeout,7000);
-          const label=labels[index];
-          assert.ok(label);
-          clicked++;
-          if(acceptClick && label.control)label.control.checked=true;
-        }
-      }}};
-    },
-    async waitForTimeout(ms){assert.ok(ms===500||ms===300);ticks++;}
+    locator(selector){assert.equal(selector,'label');return {nth(index){return labelClick(index)}};},
+    getByText(pattern,options){assert.equal(options.exact,true);return textTarget(pattern);},
+    waitForTimeout:async ms=>{assert.ok([500,250].includes(ms));ticks++;}
   };
-  return {page,guard:async()=>{checks++;if(challenge)throw Error('human_verification_required')},
-    get clicked(){return clicked},get checks(){return checks},get ticks(){return ticks},
-    labels
+  return {page,guard:async()=>{if(challenge)throw Error('human_verification_required')},
+    get clicks(){return clicks},get attemptText(){return attemptText},
+    get attemptLabel(){return attemptLabel},get ticks(){return ticks},labels
   };
 }
-const noCare=fixture();
-assert.equal(await factory(noCare.page,noCare.guard),true,'select no coverage');
-assert.equal(noCare.clicked,1);
-assert.equal(noCare.labels[0].control.checked,true);
-assert.ok(noCare.checks>=2);
+
+const matched=fixture();
+assert.equal(await choose(matched.page,matched.guard),true,'exact No AppleCare coverage');
+assert.equal(matched.labels[0].control.checked,true);
+assert.equal(matched.attemptText,1);
+assert.equal(matched.attemptLabel,0);
 
 const already=fixture({labels:[makeLabel('No AppleCare coverage',{checked:true})]});
-assert.equal(await factory(already.page,already.guard),true);
-assert.equal(already.clicked,0,'do not toggle already selected radio');
+assert.equal(await choose(already.page,already.guard),true);
+assert.equal(already.clicks,0);
 
-const rendered=fixture({delay:4});
-assert.equal(await factory(rendered.page,rendered.guard),true);
-assert.ok(rendered.ticks>=4,'wait for dynamic layout');
+const deferred=fixture({delay:3});
+assert.equal(await choose(deferred.page,deferred.guard),true);
+assert.ok(deferred.ticks>=3);
 
-const decorated=fixture({labels:[makeLabel('No AppleCare coverage',{extra:'No added monthly protection',childTitle:true})]});
-assert.equal(await factory(decorated.page,decorated.guard),true);
+const moreInfo=fixture({labels:[makeLabel('No AppleCare coverage',{extra:'No charge',childTitle:true})]});
+assert.equal(await choose(moreInfo.page,moreInfo.guard),true,'label fallback if text contains details');
+assert.equal(moreInfo.attemptLabel,1);
 
-const paid=fixture({labels:[makeLabel('AppleCare+ with Theft and Loss')]});
-assert.equal(await factory(paid.page,paid.guard),false,'paid coverage is NOT no-coverage');
-assert.equal(paid.clicked,0);
+const clickFallback=fixture({rejectText:true});
+assert.equal(await choose(clickFallback.page,clickFallback.guard),true,'native label click fallback');
+assert.equal(clickFallback.attemptText,1);
+assert.equal(clickFallback.attemptLabel,1);
 
-const ambiguous=fixture({labels:[makeLabel('No AppleCare coverage'),makeLabel('No AppleCare coverage')]});
-await assert.rejects(factory(ambiguous.page,ambiguous.guard),/no_applecare_control_ambiguous/);
-assert.equal(ambiguous.clicked,0);
+const noVisible=fixture({labels:[makeLabel('AppleCare One')]});
+assert.equal(await choose(noVisible.page,noVisible.guard),false,'no paid AppleCare substitution');
+assert.equal(noVisible.clicks,0);
+
+const duplicates=fixture({labels:[makeLabel('No AppleCare coverage'),makeLabel('No AppleCare coverage')]});
+await assert.rejects(choose(duplicates.page,duplicates.guard),/no_applecare_control_ambiguous/);
+assert.equal(duplicates.clicks,0);
 
 const unlinked=fixture({labels:[makeLabel('No AppleCare coverage',{linked:false})]});
-await assert.rejects(factory(unlinked.page,unlinked.guard),/no_applecare_selection_unverified/);
+await assert.rejects(choose(unlinked.page,unlinked.guard),/no_applecare_selection_unverified/);
 
-const unverified=fixture({acceptClick:false});
-await assert.rejects(factory(unverified.page,unverified.guard),/no_applecare_selection_unverified/);
+const failedBoth=fixture({rejectText:true,rejectLabel:true});
+await assert.rejects(choose(failedBoth.page,failedBoth.guard),/no_applecare_click_failed/);
+assert.equal(failedBoth.clicks,0);
+
+const notSelected=fixture({acceptClick:false});
+await assert.rejects(choose(notSelected.page,notSelected.guard),/no_applecare_click_failed/);
 
 const blocked=fixture({challenge:true});
-await assert.rejects(factory(blocked.page,blocked.guard),/human_verification_required/);
-assert.equal(blocked.clicked,0,'do not click past human verification');
+await assert.rejects(choose(blocked.page,blocked.guard),/human_verification_required/);
+assert.equal(blocked.clicks,0);
 
-assert.ok(source.includes("if (page.url().replace(/\\/$/, '') !== cfg.url.replace(/\\/$/, ''))"),"should not reload matching product tab");
-console.log('AppleCare DOM-label chooser tests passed: exact, pending, duplicate, paid, verification, and no reload.');
+assert.ok(source.includes("if (page.url().replace(/\\/$/, '') !== cfg.url.replace(/\\/$/, ''))"));
+console.log('No AppleCare selector: exact, delayed, fallback, paid rejection, ambiguous, unverified, challenge tests passed.');
