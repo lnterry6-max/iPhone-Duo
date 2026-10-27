@@ -490,6 +490,11 @@ def main() -> int:
             return 0 if good else 2
         if args.command == "once":
             return 0 if check(config, send=not args.no_notify) else 1
+        # Multiple ZIPs mean multiple Apple requests per round.
+        # Don't run an extremely aggressive unattended polling loop.
+        if config["period"] < 120:
+            LOG.warning("POLL_SECONDS=%g is too aggressive for five ZIP queries; using 120 seconds in watch mode.", config["period"])
+            config["period"] = 120
         LOG.info("Starting Apple pickup monitor: %s; 256GB only; every ~%gs; preferred %s",
                  ",".join(config["zip_codes"]), config["period"], config["preferred"])
         errors_in_row = 0
@@ -507,8 +512,14 @@ def main() -> int:
             except Exception:  # daemon must survive unexpected errors; don't misreport in-stock
                 errors_in_row += 1
                 LOG.exception("Unexpected monitor error; retrying")
-            # Back off on errors to avoid hammering Apple when blocked or API changes.
-            backoff = min(600.0, config["period"] * (2 ** min(errors_in_row, 5))) if errors_in_row else config["period"]
+            # Circuit breaker: a blocked/unhealthy service is not sold out.
+            # Stop instead of indefinitely retrying a server that is refusing us.
+            if errors_in_row >= 3:
+                LOG.error("Three consecutive failed inventory rounds. Stopping to respect Apple's response.")
+                LOG.error("Availability is UNKNOWN, not sold out. Review network/site status before manually restarting.")
+                return 2
+            # Back off on errors; do not retry aggressively after Apple refuses access.
+            backoff = min(1200.0, max(config["period"], 180) * (2 ** min(errors_in_row, 5))) if errors_in_row else config["period"]
             delay = max(15, backoff + random.uniform(-2, 2))
             if errors_in_row:
                 LOG.warning("Check errors=%d; waiting %.1f seconds before retry", errors_in_row, delay)
