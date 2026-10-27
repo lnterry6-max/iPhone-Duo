@@ -447,7 +447,7 @@ def parse_chrome_cli_result(output: str) -> dict:
 
 
 def chrome_checkout_flow(stock, max_total: float, allowed_hours: list[int],
-                         *, submit_order: bool) -> dict:
+                         *, submit_order: bool, resume_bag: bool = False) -> dict:
     """Execute a strict local CLI script in existing Chrome; NEVER print browser data."""
     if not connected_chrome_ready():
         raise CheckoutError("Connected Chrome session is unavailable; automation aborted.")
@@ -456,11 +456,14 @@ def chrome_checkout_flow(stock, max_total: float, allowed_hours: list[int],
         raise CheckoutError("SKU or store outside the authorized five-store/256GB allowlist")
     if not allowed_hours or any(h not in (15, 16) for h in allowed_hours):
         raise CheckoutError("No allowed future October 27 pickup hours remain")
+    if resume_bag and submit_order:
+        raise CheckoutError("Bag-only resume is always nonpaying")
     url = BUY_URLS[stock.sku]
     config = {
         "sku": stock.sku, "store": canonical, "zip": stock.zip_code,
         "url": url, "quantity": 1, "max_total_usd": float(max_total),
         "valid_hours": list(sorted(set(allowed_hours))), "submit_order": bool(submit_order),
+        "resume_bag": bool(resume_bag),
     }
     template = Path(__file__).with_name("chrome_checkout_flow.js").read_text(encoding="utf-8")
     if template.count("__DUO_CONFIG_JSON__") != 1:
@@ -476,7 +479,8 @@ def chrome_checkout_flow(stock, max_total: float, allowed_hours: list[int],
         # The CLI already has the user's signed-in Chrome extension connection.
         # tab-new only navigates the selected 256GB product; never logs in.
         navigate = subprocess.run(
-            [binary, "-s=chrome", "tab-new", url],
+            [binary, "-s=chrome", "tab-new",
+             "https://www.apple.com/shop/bag" if resume_bag else url],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, timeout=25, check=False,
         )
@@ -570,7 +574,9 @@ def dry_run_chrome(args: argparse.Namespace) -> None:
         raise CheckoutError("Store is not on the approved list")
     hours = sorted(eligible_pickup_hours(canonical))
     stock = Stock(canonical, "LOCAL-TEST", args.sku, PRODUCTS[args.sku], "unknown", args.zip_code)
-    result = chrome_checkout_flow(stock, args.max_total, hours, submit_order=False)
+    resume_bag = args.command == "dry-run-bag"
+    result = chrome_checkout_flow(stock, args.max_total, hours,
+                                  submit_order=False, resume_bag=resume_bag)
     LOG.info("Review-only Chrome test result: %s (no purchase submitted)", result.get("status"))
     if result.get("status") == "stopped":
         LOG.warning("Stopped at %s / %s: %s. Inspect Chrome manually; do not enable auto until the flow is understood.",
@@ -656,11 +662,15 @@ def main() -> int:
     commands.add_parser("reset-purchase-lock", help="Manually unlock only after checking Apple orders")
     t = commands.add_parser("attempt", help="Triggered by the local stock monitor only")
     ca = commands.add_parser("attempt-chrome", help="One-shot live Chrome extension checkout; requires arm")
-    d = commands.add_parser("dry-run-chrome", help="Test Chrome checkout to final review without payment")
-    d.add_argument("--sku", choices=list(PRODUCTS), required=True)
-    d.add_argument("--store-name", required=True)
-    d.add_argument("--zip-code", default="01609")
-    d.add_argument("--max-total", type=float, default=2200)
+    for cmd in ("dry-run-chrome", "dry-run-bag"):
+        d = commands.add_parser(
+            cmd, help="Nonpaying Chrome checkout test" +
+                      (" from existing Apple bag; does NOT add another phone" if cmd == "dry-run-bag" else " from product page")
+        )
+        d.add_argument("--sku", choices=list(PRODUCTS), required=True)
+        d.add_argument("--store-name", required=True)
+        d.add_argument("--zip-code", default="01609")
+        d.add_argument("--max-total", type=float, default=2200)
     t.add_argument("--sku", choices=list(PRODUCTS), required=True)
     t.add_argument("--store-id", required=True)
     t.add_argument("--store-name", required=True)
@@ -692,7 +702,7 @@ def main() -> int:
             print("Local purchase lock reset; still disarmed. Re-authorization required.")
         elif args.command == "attempt-chrome":
             attempt_chrome(args)
-        elif args.command == "dry-run-chrome":
+        elif args.command in ("dry-run-chrome", "dry-run-bag"):
             dry_run_chrome(args)
         else:
             attempt(args)
