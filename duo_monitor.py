@@ -252,7 +252,9 @@ def record_inventory_health(config: dict[str, Any], checked_zips: list[str],
     except (OSError, ValueError, TypeError):
         old = {}
     now = datetime.now(timezone.utc).isoformat()
-    status = "healthy" if items and not errors else ("partial" if items else "unavailable")
+    fully_scanned = len(checked_zips) == len(config["zip_codes"])
+    status = ("healthy" if items and not errors and fully_scanned
+              else ("partial" if items else "unavailable"))
     report = {
         "last_attempt_utc": now,
         "last_valid_inventory_utc": now if items else old.get("last_valid_inventory_utc"),
