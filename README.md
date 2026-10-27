@@ -96,7 +96,14 @@ This should open the **Star White 256GB** product page in a new tab of your *alr
 
 If your Chrome extension session has disconnected (for example, you closed the tab it was attached to), the monitor will **fall back to opening the product in ordinary Chrome** with a warning rather than launching Chrome for Testing. You may need to reconnect the extension.
 
-**These are still two independent systems:** `duo_monitor.py` can open a product tab via the official Chrome extension; the experimental `checkout_bot.py` is unchanged and would still launch its *separate browser profile* if explicitly selected. In `CHECKOUT_MODE=chrome_extension`, `AUTO_CHECKOUT` has no purchasing effect. No Apple order is submitted, and you must verify your requested October 27 3:00/4:00 PM pickup and place an order manually. The monitor cannot detect a manually completed purchase; stop the watcher yourself once you buy something.
+**These are still two independent systems:** `duo_monitor.py` can open a product tab via the official Chrome extension; the experimental `checkout_bot.py` is unchanged and would still launch its *separate browser profile* if explicitly selected. In `CHECKOUT_MODE=chrome_extension`, `AUTO_CHECKOUT` has no purchasing effect. No Apple order is submitted, and you must verify your requested October 27 3:00/4:00 PM pickup and place an order manually. The monitor cannot detect a manually completed purchase. **As soon as Apple confirms your order**, run this command in another Terminal window while the monitor is running:
+
+```bash
+cd ~/iPhone-Duo
+python3 duo_monitor.py mark-purchased
+```
+
+Type `ORDER CONFIRMED` when prompted. This creates a durable purchase lock in `~/.duo-stock-scout/purchase-lock.json`; the watcher sees it within about a second, exits, and will refuse further checks after restart. Run this **only after an accepted order**, not merely after a button click. If an Apple order was not accepted, do not mark it purchased. `mark-purchased` does not submit, cancel, or modify an Apple order.
 
 Chrome extension access is powerful and may include sensitive open tabs. Do not upload the extension connection token, session snapshots, or browser logs to GitHub, and do not bypass any Apple login or human verification checks.
 
