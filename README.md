@@ -167,13 +167,13 @@ python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip
 
 Keep `AUTO_CHECKOUT=false`. The dry run may still stop on a later unrecognized Apple control; the reported stage/code should guide further nonpaying diagnostics. Avoid sharing any account data or Chrome session tokens.
 
-## Checkout stop at `care_challenge_check` (October 26, 9:40 PM)
+## Chrome verification read fix (October 26, 9:46 PM)
 
-In the supervised `dry-run-chrome`, Chrome stopped at `applecare / care_challenge_check / checkout_interface_unrecognized`, **before** attempting the no-coverage selection. This does not establish that Apple blocked the session or that the AppleCare control is wrong. The previous verifier read the whole `body` once and turned any transient page-read failure into a generic code.
+The supervised checkout dry run still reached `applecare / care_challenge_check` but stopped with `challenge_page_unreadable`. The iPhone Duo configurator was visibly open in Chrome. This strongly suggests a Playwright full-page-reading problem, **not proof that Apple blocked the session**.
 
-The verifier now retries **only the read** up to 3 times during ordinary configurator rendering, and fails closed with `challenge_page_unreadable` if none succeeds. It continues to stop immediately on an identified human verification/CAPTCHA or a non-Apple URL. There is no challenge bypass, alternative credentials, or proxy behavior.
+To avoid transferring the full Apple product configurator's enormous text over Playwright's extension connection, the verification check now uses **read-only `page.evaluate()` inside Chrome** and returns only `readable`, `unreadable`, or `human_verification`. This does not disable challenge detection. Captcha/human-verification content still stops the bot immediately; unreadable pages retry up to 3 **read-only** times and then stop. No credentials, cookies, complete snapshots, or page text are exported by the checker.
 
-To test without paying, keep the Playwright Chrome extension attached, check for test items in your bag, and run:
+The project retains an explicitly supervised **nonpaying** dry run. To test it after checking your bag for unintended old test items, keep normal Chrome connected to Playwright and run:
 
 ```bash
 cd ~/iPhone-Duo
@@ -181,7 +181,7 @@ git pull
 python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
 ```
 
-Keep `AUTO_CHECKOUT=false`. If it stops, share the final `Stopped at ... / ... : ...` line only. A local browser page must remain readable and free of verification challenges before advancing to the next stage.
+Keep `AUTO_CHECKOUT=false`. If it stops, share only its final `Stopped at ... / ... : ...` diagnostic. It may add a phone to the bag but never presses the final order button. This does **not** prove Apple supports fully automatic checkout.
 
 ## AppleCare labeled-input fix (October 26, 9:33 PM)
 
