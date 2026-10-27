@@ -71,6 +71,65 @@ async page => {
   const requireClick = async (patterns, types=['button']) => {
     if (!await clickUnique(patterns, types)) throw Error('expected_control_missing');
   };
+  const addProductToBag = async () => {
+    // Apple may show Add to Bag as a button or link, and the UI may render
+    // after selecting No AppleCare. A single product-specific Continue step
+    // is allowed; no pay/checkout/express-payment buttons are used here.
+    const addPattern=/^add(?:\s+this\s+item)?\s+to\s+(?:my\s+)?(?:bag|cart)(?:\s*[—:-]\s*.*)?$/i;
+    const continuePattern=/^continue$/i;
+    let usedContinue=false;
+    for(let attempt=0;attempt<26;attempt++){
+      operation='product_challenge_check';
+      await stopOnChallenge();
+      const current=page.url();
+      if(!appleHost(current))throw Error('outside_apple');
+      if (/\/shop\/bag(?:[/?#]|$)/.test(current)) return true;
+      // Never use a product Continue control if Apple's flow went off
+      // the exact approved 256GB configuration page.
+      if(!current.startsWith(cfg.url)) throw Error('product_page_changed');
+      operation='product_find_add_to_bag';
+      const candidates=[];
+      let disabled=false;
+      for(const role of ['button','link']){
+        const item=page.getByRole(role,{name:addPattern});
+        const count=await item.count();
+        if(count>1)throw Error('product_add_to_bag_ambiguous');
+        if(count===1 && await item.isVisible()){
+          if(await item.isEnabled())candidates.push(item);
+          else disabled=true;
+        }
+      }
+      if(candidates.length>1)throw Error('product_add_to_bag_ambiguous');
+      if(candidates.length===1){
+        operation='product_click_add_to_bag';
+        await candidates[0].click({timeout:5500});
+        operation='product_confirm_add_to_bag';
+        await stopOnChallenge();
+        return true;
+      }
+      if(disabled)throw Error('product_add_to_bag_disabled');
+
+      // Apple's phone configurator may have a final "Continue" after the
+      // coverage choice; click it at most once, after No AppleCare was verified.
+      // Never click general Continue on checkout or payment pages.
+      if(!usedContinue){
+        operation='product_find_continue';
+        const next=page.getByRole('button',{name:continuePattern});
+        const nextCount=await next.count();
+        if(nextCount>1)throw Error('product_continue_ambiguous');
+        if(nextCount===1 && await next.isVisible() && await next.isEnabled()){
+          operation='product_click_continue';
+          await next.click({timeout:5500});
+          usedContinue=true;
+          await stopOnChallenge();
+          continue;
+        }
+      }
+      operation='product_wait_for_add_to_bag';
+      await page.waitForTimeout(500);
+    }
+    throw Error(usedContinue?'product_add_to_bag_missing_after_continue':'product_add_to_bag_missing');
+  };
   const openBagCheckout = async () => {
     // The Apple bag may render its Checkout control as a link, button,
     // or asynchronously. Avoid guessing unrelated "Continue" controls or
@@ -281,7 +340,7 @@ async page => {
     if (!await chooseNoAppleCare()) throw Error('no_applecare_option_missing');
     // Never continue if the explicit no-coverage choice isn't available.
     stage = 'product';
-    await requireClick([/^add to bag$/i, /^add to cart$/i]);
+    await addProductToBag();
     stage = 'bag';
     await page.goto('https://www.apple.com/shop/bag', {waitUntil:'domcontentloaded', timeout:30000});
     await stopOnChallenge();
@@ -349,6 +408,9 @@ async page => {
     const known = new Set([
       'outside_apple','human_verification_required','challenge_page_unreadable','challenge_eval_unavailable',
       'bag_checkout_control_missing','bag_checkout_ambiguous',
+      'product_page_changed','product_add_to_bag_ambiguous','product_add_to_bag_disabled',
+      'product_continue_ambiguous','product_add_to_bag_missing_after_continue',
+      'product_add_to_bag_missing',
       'expected_control_missing',
       'final_review_missing','order_mismatch','wrong_storage','quantity_not_proven',
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
