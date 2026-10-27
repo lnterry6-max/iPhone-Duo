@@ -311,6 +311,23 @@ python3 checkout_bot.py inspect-test-product
 
 This is a **read-only inspector**. It reports up to 15 short visible pickup-related control labels and names of the five approved stores visible on the page. It does **not** click, add to bag, navigate, claim a restock, or submit payment. Observing a different product in stock does **not** qualify the phone for purchase; real matching remains hard-limited to SKUs `MK1E4LL/A` and `MK1F4LL/A`.
 
+### Read-only inspector update — October 26, 10:58 PM
+
+The configured Apple Watch Series 12 page exposed **The Shops at Blackstone Valley** but no actionable pickup-related control labels. This establishes that the Playwright inspector can read a named Apple Store, **not that the Watch or iPhone Duo is in stock**.
+
+The inspector now also checks **very short local text immediately adjacent to the exact approved store name**, without exporting full page content. It reports `available`, `unavailable`, or `unknown`, **only for that test product** and only when the local UI explicitly provides a signal. If text is absent or conflicting it prints `unknown`. It never makes a purchase, navigates, modifies your bag, or triggers a Duo checkout.
+
+To retest in existing Chrome:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+"$HOME/.local/bin/playwright-cli" -s=chrome tab-select 2
+python3 checkout_bot.py inspect-test-product
+```
+
+If the Watch page displays no pickup indication for the selected configuration, an `unknown` result is expected. Real Duo stock detection remains a separate unresolved problem: the private Apple pickup requests were returning HTTP 541. Do not treat another product's status as authorization to purchase a Duo.
+
 ### Turn on read-only inventory monitoring
 
 ```bash
