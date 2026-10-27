@@ -90,6 +90,35 @@ class ChromeAutomationTests(unittest.TestCase):
             self.assertEqual(cmd[:4], [str(Path(tmp) / "playwright-cli"), "-s=chrome", "--raw", "run-code"])
             self.assertFalse(list(Path(tmp).glob("chrome-flow-*.js")))
 
+    def test_bag_resume_uses_existing_bag_and_never_submits_payment(self):
+        from duo_monitor import Stock
+        stock = Stock("Apple Natick", "R002", "MK1E4LL/A",
+                      "Star White - 256GB", "unknown", "01609")
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(bot, "PROFILE_ROOT", Path(tmp)), \
+             patch.object(bot, "chrome_cli", return_value=Path(tmp) / "playwright-cli"), \
+             patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run", side_effect=[
+                 Mock(returncode=0),
+                 Mock(returncode=0, stdout='DUO_AUTOMATION_RESULT={"status":"stopped","stage":"pickup","code":"pickup_store_missing"}')
+             ]) as run:
+            result = bot.chrome_checkout_flow(stock, 2200, [15, 16],
+                                              submit_order=False, resume_bag=True)
+            self.assertEqual(result["status"], "stopped")
+            self.assertEqual(run.call_args_list[0].args[0][-1], "https://www.apple.com/shop/bag")
+            self.assertFalse(list(Path(tmp).glob("chrome-flow-*.js")))
+
+    def test_resumed_bag_cannot_submit_real_purchase(self):
+        from duo_monitor import Stock
+        stock = Stock("Apple Natick", "R002", "MK1E4LL/A", "Star White - 256GB",
+                      "unknown", "01609")
+        with patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot.subprocess, "run") as run:
+            with self.assertRaises(CheckoutError):
+                bot.chrome_checkout_flow(stock, 2200, [15], submit_order=True,
+                                         resume_bag=True)
+            run.assert_not_called()
+
     def test_unexpected_cli_output_fails_closed(self):
         from duo_monitor import Stock
         stock = Stock("Apple Natick", "R002", "MK1E4LL/A", "Star White - 256GB", "in_stock", "01609")
