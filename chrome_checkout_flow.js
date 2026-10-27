@@ -45,7 +45,7 @@ async page => {
   const chooseNoAppleCare = async () => {
     // Apple's US product pages offer an explicit "No AppleCare+ coverage"
     // or "No AppleCare coverage" radio/label. Never select paid plans.
-    const withoutCare = /^No AppleCare(?:\\+)? coverage$/i;
+    const withoutCare = /^No AppleCare(?:\+)? coverage$/i;
     for (const type of ['radio', 'button']) {
       const choice = page.getByRole(type, {name: withoutCare});
       if (await choice.count() === 1 && await choice.isVisible() && await choice.isEnabled()) {
@@ -85,8 +85,8 @@ async page => {
     if (/512gb|1tb|2tb/.test(s)) throw Error('wrong_storage');
     // Refuse summaries that explicitly show an additional AppleCare plan.
     // A generic AppleCare upsell is not proof of an order, so be conservative.
-    if (/applecare\\s*(?:\\+|one).*?(?:\\$\\s*\\d|per month|monthly|annual)/i.test(s)
-        && !/no applecare\\+? coverage/i.test(s)) throw Error('unexpected_applecare');
+    if (/applecare\s*(?:\+|one).*?(?:\$\s*\d|per month|monthly|annual)/i.test(s)
+        && !/no applecare\+? coverage/i.test(s)) throw Error('unexpected_applecare');
     if (!/(?:quantity|qty)\s*:?\s*1\b/.test(s)) throw Error('quantity_not_proven');
     if (/(?:quantity|qty)\s*:?\s*[2-9]/.test(s)) throw Error('wrong_quantity');
     if (!/\b(?:oct(?:ober)?\.?\s+27(?:,?\s+2026)?|10\/27(?:\/2026)?|2026-10-27)\b/.test(s)) throw Error('wrong_pickup_date');
