@@ -72,58 +72,62 @@ async page => {
     if (!await clickUnique(patterns, types)) throw Error('expected_control_missing');
   };
   const chooseNoAppleCare = async () => {
-    // The user's read-only browser inspection showed a label and input
-    // named "No AppleCare coverage". Prefer the associated control rather
-    // than inferring state from a wrapper element.
-    const noCareName = /^\s*No AppleCare(?:\+)? coverage\s*$/i;
-    operation = 'care_locate_control';
-    const control = page.getByLabel(noCareName, {exact:true});
-    const labels = page.locator('label').filter({hasText:noCareName});
-    for (let attempt=0; attempt<24; attempt++) {
+    // Read ONLY label text and associated control state inside Chrome.
+    // The inspected Apple configurator exposes a <label> containing the
+    // literal wording "No AppleCare coverage". Its native radio/checkbox
+    // must be verified as checked after a real Playwright click.
+    const discover = async () => page.evaluate(() => {
+      const norm = text => String(text || '').replace(/\s+/g,' ').trim().toLowerCase();
+      const title = /^(no applecare(?:\+)? coverage)$/;
+      const labels = [...document.querySelectorAll('label')];
+      const found = [];
+      labels.forEach((label, index) => {
+        const visible = !!(label.getClientRects().length);
+        if (!visible) return;
+        const own = norm(label.innerText);
+        // Apple may include subtext alongside the exact no-coverage title.
+        const exactChild = [...label.querySelectorAll('h1,h2,h3,h4,span,strong,p,div')]
+          .some(el => title.test(norm(el.innerText)));
+        if (!title.test(own) && !exactChild) return;
+        const input = label.control || label.querySelector('input[type="radio"], input[type="checkbox"]')
+          || (label.htmlFor ? document.getElementById(label.htmlFor) : null);
+        if (!input || !['radio','checkbox'].includes(input.type)) {
+          found.push({index, readable:false, checked:false});
+          return;
+        }
+        found.push({index, readable:true, checked:input.checked === true});
+      });
+      if (found.length !== 1) return {kind:found.length?'ambiguous':'missing'};
+      return {kind:found[0].readable?'found':'unverifiable', ...found[0]};
+    });
+
+    // No blind clicks or XPath guessing; wait for the observed HTML to render.
+    for (let attempt=0; attempt<50; attempt++) {
       operation = 'care_challenge_check';
       await stopOnChallenge();
-
-      operation = 'care_count_control';
-      const controlCount = await control.count();
-      if (controlCount > 1) throw Error('no_applecare_control_ambiguous');
-      if (controlCount === 1) {
-        operation = 'care_check_status';
-        const isSelected = await control.isChecked();
-        if (!isSelected) {
-          operation = 'care_select_control';
-          await control.check({timeout:4500});
+      operation = 'care_discover_label';
+      const state = await discover();
+      if (state.kind === 'ambiguous') throw Error('no_applecare_control_ambiguous');
+      if (state.kind === 'unverifiable') throw Error('no_applecare_selection_unverified');
+      if (state.kind === 'found') {
+        if (!state.checked) {
+          operation = 'care_click_exact_label';
+          await page.locator('label').nth(state.index).click({timeout:7000});
         }
-        operation = 'care_verify_control';
-        if (!await control.isChecked()) throw Error('no_applecare_selection_unverified');
-        operation = 'care_confirm_no_challenge';
-        await stopOnChallenge();
-        return true;
-      }
-
-      // Fallback for an Apple label with an unexposed accessible name.
-      // Click ONLY the exact no-coverage label and confirm its linked input.
-      operation = 'care_count_label';
-      const labelCount = await labels.count();
-      if (labelCount > 1) throw Error('no_applecare_control_ambiguous');
-      if (labelCount === 1 && await labels.isVisible()) {
-        operation = 'care_fallback_inspect';
-        const before = await labels.evaluate(node => {
-          const input = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
-          return !!input && input.checked === true;
-        });
-        if (!before) {
-          operation = 'care_fallback_click';
-          await labels.click({timeout:4500});
+        operation = 'care_verify_selection';
+        for (let verify=0; verify<5; verify++) {
+          const next = await discover();
+          if (next.kind === 'found' && next.index === state.index && next.checked) {
+            operation = 'care_confirm_no_challenge';
+            await stopOnChallenge();
+            return true;
+          }
+          if (next.kind === 'ambiguous' || next.kind === 'unverifiable') {
+            throw Error('no_applecare_selection_unverified');
+          }
+          await page.waitForTimeout(300);
         }
-        operation = 'care_fallback_verify';
-        const verified = await labels.evaluate(node => {
-          const input = node.control || node.querySelector('input[type="radio"], input[type="checkbox"]');
-          return !!input && input.checked === true;
-        });
-        if (!verified) throw Error('no_applecare_selection_unverified');
-        operation = 'care_confirm_no_challenge';
-        await stopOnChallenge();
-        return true;
+        throw Error('no_applecare_selection_unverified');
       }
       operation = 'care_wait_for_render';
       await page.waitForTimeout(500);
@@ -175,7 +179,12 @@ async page => {
     if (!Array.isArray(cfg.valid_hours) || !cfg.valid_hours.length || cfg.valid_hours.some(x=>![15,16].includes(x))) return fail('hours_invalid');
     if (cfg.quantity !== 1 || typeof cfg.submit_order !== 'boolean') return fail('not_armed');
     stage = 'product';
-    await page.goto(cfg.url, {waitUntil:'domcontentloaded', timeout:30000});
+    // The Python launcher already opened the approved SKU in a new Chrome
+    // tab. Do NOT reload it again: Apple's React configurator may reset its
+    // choices or hydration state on the second redundant navigation.
+    if (page.url().replace(/\/$/, '') !== cfg.url.replace(/\/$/, '')) {
+      await page.goto(cfg.url, {waitUntil:'domcontentloaded', timeout:30000});
+    }
     await stopOnChallenge();
     stage = 'applecare';
     if (!await chooseNoAppleCare()) throw Error('no_applecare_option_missing');
