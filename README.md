@@ -273,6 +273,54 @@ This opens the **existing bag** in attached Chrome, confirms the Star White 256G
 
 The screenshot showed **pickup unavailable at Blackstone Valley** at the time, but that does not confirm status for Natick or other allowed stores. Avoid assuming that a bag item reserves store inventory or that the requested next-day appointment will be offered. Continue to keep `AUTO_CHECKOUT=false` until checkout has been safely verified in the real Apple Store.
 
+## Stock-triggered checkout testing (safe and nonpaying)
+
+The Apple API stock monitor can now **automatically launch one checkout dry run when a qualifying 256GB Duo is detected as in stock**. This uses the same approved five-store list and October 27 3:00/4:00 PM time-window constraints as the original monitor. It **never presses Place Order** in this mode. **Apple's inventory endpoint has returned HTTP 541 in practice**, so this is *not* a guaranteed or currently verified live restock detector; it will stop after repeated failures rather than evading Apple's verification.
+
+### Configure your local Mac
+
+Leave Chrome open with its authorized Playwright extension connection, and make sure your Apple bag has **one and only one approved iPhone Duo** (do not add a cheaper test product to the existing Duo bag). In **local `.env` only**, set:
+
+```dotenv
+CHECKOUT_MODE=chrome_extension
+STOCK_ACTION=dry_run_bag
+AUTO_CHECKOUT=false
+OPEN_BROWSER=false
+POLL_SECONDS=180
+```
+
+With this configuration, any *new* qualifying in-stock response causes the monitor to send a notification and start the existing-bag **`checkout_bot.py dry-run-bag`**, which may navigate checkout but **can never submit an order**. A durable one-time `.state/stock-dry-run-claimed.json` prevents duplicate dry-run launches. The claim does **not** mean a purchase was accepted. The only order-acceptance signal is Apple's confirmation.
+
+### Test the trigger without Apple's inventory endpoint
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 duo_monitor.py simulate-stock --sku MK1E4LL/A --store-name Natick
+```
+
+This injects a **fake in-stock event** solely to test the allowlist and one-shot launcher; it is **NOT evidence that Natick actually has the phone**. It will launch the **nonpaying** existing-bag browser dry run if configured as above. The checkout log is at `.state/stock-dry-run.log`. Simulation uses a **separate** `.state/simulated-stock-dry-run-claimed.json` so testing cannot suppress a future real restock. Repeating the simulation will not launch another browser checkout unless the user deliberately resets its test claim. Invalid SKUs or stores are refused.
+
+### Test visible Apple pickup UI with another product (no purchase)
+
+To test that Playwright can read a **known in-stock accessory or different Apple product**, open its public product page manually in the same normal Chrome, select that tab, and manually open Apple's public pickup-availability panel if offered. Run:
+
+```bash
+python3 checkout_bot.py inspect-test-product
+```
+
+This is a **read-only inspector**. It reports up to 15 short visible pickup-related control labels and names of the five approved stores visible on the page. It does **not** click, add to bag, navigate, claim a restock, or submit payment. Observing a different product in stock does **not** qualify the phone for purchase; real matching remains hard-limited to SKUs `MK1E4LL/A` and `MK1F4LL/A`.
+
+### Turn on read-only inventory monitoring
+
+```bash
+python3 duo_monitor.py watch
+```
+
+If Apple refuses the pickup requests with 541, **do not use proxy rotation or verification bypasses**. The monitor marks stock **unknown**, backs off, and stops after three failed rounds. A working normal Chrome tab does not prove the private inventory endpoint is responding. Stock alerts are not confirmations that the exact October 27 pickup window is available.
+
+**Critical:** Automatic payment using `CHECKOUT_MODE=chrome_auto` remains experimental and is **not approved by these tests**. Do not enable it based on this setup. Any future purchasing mode must verify the exact SKU, quantity, no paid AppleCare, approved store, October 27 appointment and total cap immediately before submission, and must permanently block duplicates or unknown outcomes.
+
 ## Exactly five Apple Stores
 
 Only these five stores are accepted by `pickup_rules.py`. Every other store returned by Apple is ignored for stock events, alerts, and checkout.
