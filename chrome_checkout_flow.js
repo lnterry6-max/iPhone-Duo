@@ -328,6 +328,24 @@ async page => {
     if (!Number.isFinite(cfg.max_total_usd) || cfg.max_total_usd < 1999 || cfg.max_total_usd > 3000) return fail('cap_invalid');
     if (!Array.isArray(cfg.valid_hours) || !cfg.valid_hours.length || cfg.valid_hours.some(x=>![15,16].includes(x))) return fail('hours_invalid');
     if (cfg.quantity !== 1 || typeof cfg.submit_order !== 'boolean') return fail('not_armed');
+    if (cfg.resume_bag && cfg.submit_order) return fail('bag_resume_must_not_submit');
+    if (cfg.resume_bag) {
+      // A resumed bag is for nonpaying testing ONLY. Confirm the configured
+      // phone exists in the bag; do not add another unit or make any payment.
+      stage = 'bag';
+      operation = 'bag_resume_verify';
+      if (!appleHost(page.url())) return fail('outside_apple');
+      if (!/\/shop\/bag(?:[/?#]|$)/.test(page.url())) {
+        await page.goto('https://www.apple.com/shop/bag',{waitUntil:'domcontentloaded',timeout:30000});
+      }
+      await stopOnChallenge();
+      const expectedColor = cfg.sku === 'MK1E4LL/A' ? 'star white' : 'night sky';
+      const present=await page.evaluate(color=>{
+        const text=(document.body?.innerText||'').toLowerCase();
+        return text.includes('iphone duo 256gb '+color);
+      },expectedColor);
+      if (!present) return fail('bag_expected_phone_missing');
+    } else {
     stage = 'product';
     // The Python launcher already opened the approved SKU in a new Chrome
     // tab. Do NOT reload it again: Apple's React configurator may reset its
@@ -344,6 +362,7 @@ async page => {
     stage = 'bag';
     await page.goto('https://www.apple.com/shop/bag', {waitUntil:'domcontentloaded', timeout:30000});
     await stopOnChallenge();
+    }
     if (!await openBagCheckout()) throw Error('bag_checkout_control_missing');
     stage = 'pickup';
     await stopOnChallenge();
@@ -408,6 +427,7 @@ async page => {
     const known = new Set([
       'outside_apple','human_verification_required','challenge_page_unreadable','challenge_eval_unavailable',
       'bag_checkout_control_missing','bag_checkout_ambiguous',
+      'bag_expected_phone_missing','bag_resume_must_not_submit',
       'product_page_changed','product_add_to_bag_ambiguous','product_add_to_bag_disabled',
       'product_continue_ambiguous','product_add_to_bag_missing_after_continue',
       'product_add_to_bag_missing',
