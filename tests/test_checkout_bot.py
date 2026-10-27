@@ -104,6 +104,34 @@ class ChromeAutomationTests(unittest.TestCase):
                 bot.chrome_checkout_flow(stock, 2200, [15], submit_order=True)
 
 
+    def test_raw_and_json_quoted_chrome_results(self):
+        expected = {"status": "stopped", "stage": "applecare",
+                    "code": "no_applecare_option_missing", "clickedOrderButton": False}
+        value = "DUO_AUTOMATION_RESULT=" + bot.json.dumps(expected)
+        self.assertEqual(bot.parse_chrome_cli_result(value), expected)
+        self.assertEqual(bot.parse_chrome_cli_result(bot.json.dumps(value)), expected)
+
+    def test_raw_chrome_result_with_nested_object(self):
+        value = 'DUO_AUTOMATION_RESULT={"status":"stopped","stage":"product","code":"missing","debug":{"attempted":false}}'
+        parsed = bot.parse_chrome_cli_result(value)
+        self.assertEqual(parsed["stage"], "product")
+        self.assertNotIn("debug", parsed)
+
+    def test_chrome_parser_rejects_unverified_messages(self):
+        with self.assertRaises(CheckoutError):
+            bot.parse_chrome_cli_result("User account information from website")
+        with self.assertRaises(CheckoutError):
+            bot.parse_chrome_cli_result("DUO_AUTOMATION_RESULT={invalid")
+
+    def test_no_applecare_option_is_explicit_in_script(self):
+        script = Path(__file__).resolve().parents[1] / "chrome_checkout_flow.js"
+        source = script.read_text(encoding="utf-8")
+        self.assertIn("chooseNoAppleCare()", source)
+        self.assertIn("no_applecare_option_missing", source)
+        self.assertIn("unexpected_applecare", source)
+        self.assertIn("if (cfg.submit_order === false)", source)
+
+
 
 class SummaryTests(unittest.TestCase):
     def test_exact_model_color_and_pickup(self):
