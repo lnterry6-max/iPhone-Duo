@@ -233,6 +233,81 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def health_path(config: dict[str, Any]) -> Path:
+    return Path(config["state_path"]).with_name("inventory-health.json")
+
+
+def record_inventory_health(config: dict[str, Any], checked_zips: list[str],
+                            items: list[Stock], errors: list[str]) -> None:
+    """Persist honest last-scan health, never confuse a refused request with sold out.
+
+    Stores only ZIPs, counts, errors and timestamps, never credentials or account
+    data. Keep last validated observation for offline status inspection.
+    """
+    path = health_path(config)
+    try:
+        old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(old, dict):
+            old = {}
+    except (OSError, ValueError, TypeError):
+        old = {}
+    now = datetime.now(timezone.utc).isoformat()
+    status = "healthy" if items and not errors else ("partial" if items else "unavailable")
+    report = {
+        "last_attempt_utc": now,
+        "last_valid_inventory_utc": now if items else old.get("last_valid_inventory_utc"),
+        "condition": status,
+        "checked_zip_codes": checked_zips,
+        "configured_zip_count": len(config["zip_codes"]),
+        "valid_store_sku_results": len(items),
+        "in_stock": sum(item.status == "in_stock" for item in items),
+        "out_of_stock": sum(item.status == "out_of_stock" for item in items),
+        "unknown": sum(item.status == "unknown" for item in items),
+        "errors": errors[:8],
+    }
+    try:
+        write_state(path, {"status": {}, "health": report})
+    except OSError as exc:
+        LOG.warning("Could not persist inventory health report (%s)", type(exc).__name__)
+
+
+def show_inventory_health(config: dict[str, Any]) -> bool:
+    """Network-free health check for the local monitor."""
+    path = health_path(config)
+    if not path.exists():
+        print("No inventory health record yet. Start a normal stock scan.")
+        return False
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        data = raw["health"]
+        condition = data["condition"]
+        if condition not in ("healthy", "partial", "unavailable"):
+            raise ValueError("unrecognized condition")
+    except (OSError, ValueError, KeyError, TypeError):
+        print("Inventory health record is unreadable; status is UNKNOWN.")
+        return False
+    print("iPhone Duo stock-monitor health (local record; NOT real-time inventory)")
+    print("Latest attempt (UTC):", data.get("last_attempt_utc") or "unknown")
+    print("Last valid inventory (UTC):", data.get("last_valid_inventory_utc") or "never")
+    print("Condition:", condition)
+    print("ZIP codes checked:", ", ".join(data.get("checked_zip_codes", [])))
+    print("Valid store/SKU entries:", data.get("valid_store_sku_results", 0))
+    print("In stock / unavailable / unknown:",
+          data.get("in_stock", 0), "/", data.get("out_of_stock", 0), "/", data.get("unknown", 0))
+    for message in data.get("errors", []):
+        print("Error:", message)
+    if condition != "healthy":
+        print("CAUTION: Partial or failed inventory coverage is NOT proof of sold out.")
+    try:
+        previous = datetime.fromisoformat(data["last_valid_inventory_utc"])
+        age = (datetime.now(timezone.utc) - previous).total_seconds()
+        if age > max(300, 2 * config["period"]):
+            print("CAUTION: Last valid inventory result is stale.")
+    except (KeyError, TypeError, ValueError):
+        print("CAUTION: No valid timestamp; inventory has not been verified.")
+    return condition == "healthy"
+
+
 def compute_new_stock(items: list[Stock], existing: dict[str, Any]) -> tuple[list[Stock], dict[str, Any]]:
     """Alert on newly available; preserve last status if an API response is missing/unknown."""
     statuses = dict(existing)
@@ -466,7 +541,9 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     # requests, shorten the rate-limit interval, or bypass Apple's challenge.
     state = read_state(config["state_path"]) if send else None
     previous_status = state["status"] if state is not None else {}
+    checked_zips = []
     for zip_code in config["zip_codes"]:
+        checked_zips.append(zip_code)
         try:
             items = parse_inventory(fetch_inventory(zip_code), zip_code)
             all_items.extend(items)
@@ -490,6 +567,7 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
         except InventoryError as exc:
             errors.append(f"{zip_code}: {exc}")
             LOG.error("%s", errors[-1])
+    record_inventory_health(config, checked_zips, all_items, errors)
     if not all_items:
         LOG.error("No valid inventory received; NOT assuming sold out")
         return False
@@ -626,7 +704,7 @@ def doctor(config: dict[str, Any]) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Monitor iPhone Duo 256GB pickup availability near ZIP 01609")
-    parser.add_argument("command", nargs="?", choices=["watch", "once", "test-alert", "prepare-checkout", "mark-purchased", "doctor", "simulate-stock"], default="once")
+    parser.add_argument("command", nargs="?", choices=["watch", "once", "status", "test-alert", "prepare-checkout", "mark-purchased", "doctor", "simulate-stock"], default="once")
     parser.add_argument("--env", default=".env", help="Read local .env file (never commit secrets)")
     parser.add_argument("--no-notify", action="store_true", help="Do stock lookup without sending notifications")
     parser.add_argument("--sku", choices=list(PRODUCTS), default="MK1E4LL/A", help="Simulated-stock Duo SKU only")
@@ -639,6 +717,8 @@ def main() -> int:
             mark_purchased()
             return 0
         config = get_config()
+        if args.command == "status":
+            return 0 if show_inventory_health(config) else 2
         if args.command == "doctor":
             return 0 if doctor(config) else 2
         if args.command == "simulate-stock":
