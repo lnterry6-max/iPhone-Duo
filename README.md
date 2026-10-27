@@ -167,6 +167,22 @@ python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip
 
 Keep `AUTO_CHECKOUT=false`. The dry run may still stop on a later unrecognized Apple control; the reported stage/code should guide further nonpaying diagnostics. Avoid sharing any account data or Chrome session tokens.
 
+## AppleCare labeled-input fix (October 26, 9:33 PM)
+
+The supervised dry run advanced to Apple's AppleCare selection but returned `stopped at applecare: checkout_interface_unrecognized`. **No purchase was submitted.** This generic error could be caused by the old wrapper-label check, but the live underlying exception has not been inspected.
+
+The updated Chrome flow prefers Playwright's `page.getByLabel(/^No AppleCare(?:\\+)? coverage$/i)` to locate Apple's radio input, calls `check()` only when necessary, and verifies `isChecked()`. It rejects ambiguous labels and uses a strictly verified label fallback. The controlled result now includes a narrow `step` identifier (for example, `care_select_control`, `care_verify_control`) without logging personal page content.
+
+To test **without authorizing payment**, check your bag for test items, ensure Chrome remains connected, then run:
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
+```
+
+Keep `AUTO_CHECKOUT=false`, and do not arm the purchase bot. If it stops again, share only the final `Stopped at ... / ... : ...` line; do not share Apple session tokens, private page snapshots, or payment information. The test may manipulate the phone configuration or bag but will **not** press Place Order.
+
 ## Troubleshoot a missing No AppleCare+ option (read-only)
 
 If `dry-run-chrome` stops with `Stopped at applecare: no_applecare_option_missing`, the page did **not** expose the exact selection label the automation expected. That does **not** mean AppleCare is compulsory; the option may be worded differently or presented later.
