@@ -273,6 +273,29 @@ This opens the **existing bag** in attached Chrome, confirms the Star White 256G
 
 The screenshot showed **pickup unavailable at Blackstone Valley** at the time, but that does not confirm status for Natick or other allowed stores. Avoid assuming that a bag item reserves store inventory or that the requested next-day appointment will be offered. Continue to keep `AUTO_CHECKOUT=false` until checkout has been safely verified in the real Apple Store.
 
+## Faster stock-to-Chrome handoff (October 26, 2026)
+
+The monitor formerly checked **all five ZIP codes** before handling even the first valid, new, eligible stock response, and then sent notification requests before opening Chrome. That could add substantial avoidable latency. It now:
+
+- Begins the handoff immediately when a configured ZIP first returns **new in-stock inventory for one approved 256GB Duo at an allowed store**. Other ZIP codes are not fetched in that round after the eligible hit, and previous statuses from unqueried stores are preserved.
+- Starts the Chrome handoff **before** waiting on ntfy or Telegram, which can each take up to 12 seconds.
+- In `CHECKOUT_MODE=chrome_extension` and `STOCK_ACTION=notify`, asks **regular Google Chrome directly** to open the approved product page using native macOS `open -a` without waiting for a Playwright CLI round trip. Falls back to the connected CLI if that launch fails. The user's existing browser session is reused without copying credentials.
+
+This is a *latency optimization*, **not faster inventory polling**: five ZIP locations still need coverage over healthy rounds, the watcher's rate-limit interval is still at least 120 seconds, a live pickup time is not guaranteed, and Apple HTTP 541 means the stock feed is unavailable (not sold out). The tool cannot promise to catch a fleeting restock. It will not bypass Apple's human verification or automatically place an order in the recommended setup.
+
+Recommended settings for a fast nonpaying browser handoff (local `.env`):
+
+```dotenv
+CHECKOUT_MODE=chrome_extension
+STOCK_ACTION=notify
+BROWSER_APP=Google Chrome
+OPEN_BROWSER=true
+AUTO_CHECKOUT=false
+POLL_SECONDS=120
+```
+
+An optional `NTFY_TOPIC` can deliver urgent push notifications to the ntfy phone app. Use `python3 duo_monitor.py test-alert` to verify a configured notification channel. With no configured channel, this will open a Chrome tab on stock if available, but will not deliver a phone alert.
+
 ## Payment-readiness preflight (October 26, 2026)
 
 The repo now has a **no-payment, no-inventory-request** readiness check:
