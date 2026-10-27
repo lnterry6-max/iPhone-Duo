@@ -639,8 +639,8 @@ def attempt_chrome(args: argparse.Namespace) -> None:
         raise CheckoutError("Specific Apple Store identity required")
     # All nonpayment prerequisites are checked BEFORE creating the durable lock.
     stock = verify_stock(args.sku, args.store_id, args.zip_code)
-    if stock.store.casefold() != args.store_name.casefold():
-        raise CheckoutError("Apple Store identity changed")
+    if canonical_store(stock.store) is None or canonical_store(stock.store) != canonical_store(args.store_name):
+        raise CheckoutError("Apple Store identity changed or is outside the five-store allowlist")
     hours = sorted(eligible_pickup_hours(stock.store))
     if not connected_chrome_ready():
         raise CheckoutError("Your signed-in Chrome session disconnected")
