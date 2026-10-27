@@ -71,6 +71,44 @@ async page => {
   const requireClick = async (patterns, types=['button']) => {
     if (!await clickUnique(patterns, types)) throw Error('expected_control_missing');
   };
+  const openBagCheckout = async () => {
+    // The Apple bag may render its Checkout control as a link, button,
+    // or asynchronously. Avoid guessing unrelated "Continue" controls or
+    // Apple Pay instant-payment options.
+    const names = [
+      /^check[\s-]?out$/i,
+      /^proceed to check[\s-]?out$/i,
+      /^continue to check[\s-]?out$/i
+    ];
+    for (let attempt=0; attempt<20; attempt++) {
+      operation = 'bag_challenge_check';
+      await stopOnChallenge();
+      operation = 'bag_find_checkout';
+      const matches=[];
+      for (const name of names) {
+        for (const type of ['button','link']) {
+          const candidate=page.getByRole(type,{name});
+          const count=await candidate.count();
+          if (count > 1) throw Error('bag_checkout_ambiguous');
+          if (count === 1 && await candidate.isVisible()
+              && (type==='link' || await candidate.isEnabled())) {
+            matches.push(candidate);
+          }
+        }
+      }
+      if (matches.length > 1) throw Error('bag_checkout_ambiguous');
+      if (matches.length === 1) {
+        operation = 'bag_checkout_click';
+        await matches[0].click({timeout:6000});
+        operation = 'bag_checkout_verify';
+        await stopOnChallenge();
+        return true;
+      }
+      operation = 'bag_wait_for_checkout';
+      await page.waitForTimeout(500);
+    }
+    return false;
+  };
   const chooseNoAppleCare = async () => {
     // Read ONLY label text and associated control state inside Chrome.
     // The inspected Apple configurator exposes a <label> containing the
@@ -247,7 +285,7 @@ async page => {
     stage = 'bag';
     await page.goto('https://www.apple.com/shop/bag', {waitUntil:'domcontentloaded', timeout:30000});
     await stopOnChallenge();
-    await requireClick([/^check out$/i, /^checkout$/i]);
+    if (!await openBagCheckout()) throw Error('bag_checkout_control_missing');
     stage = 'pickup';
     await stopOnChallenge();
     await requireClick([/^(pick up|pickup|pick up in store)$/i, /pick up at an apple store/i]);
@@ -310,6 +348,7 @@ async page => {
     // Never log browser snapshots, account IDs, tokens, cards or private page text.
     const known = new Set([
       'outside_apple','human_verification_required','challenge_page_unreadable','challenge_eval_unavailable',
+      'bag_checkout_control_missing','bag_checkout_ambiguous',
       'expected_control_missing',
       'final_review_missing','order_mismatch','wrong_storage','quantity_not_proven',
       'wrong_quantity','wrong_pickup_date','not_pickup','wrong_pickup_time',
