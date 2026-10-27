@@ -234,7 +234,8 @@ class ProductTests(unittest.TestCase):
                 args=launch.call_args.args[0]
                 self.assertIn("dry-run-bag", args)
                 self.assertNotIn("attempt-chrome", args)
-                claim=Path(temp) / "stock-dry-run-claimed.json"
+                claim=Path(temp) / "simulated-stock-dry-run-claimed.json"
+                self.assertFalse((Path(temp) / "stock-dry-run-claimed.json").exists())
                 data=m.json.loads(claim.read_text())
                 self.assertEqual(data["mode"], "nonpaying_dry_run")
                 self.assertEqual(data["sku"], "MK1E4LL/A")
