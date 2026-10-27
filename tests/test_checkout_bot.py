@@ -6,6 +6,31 @@ import checkout_bot as bot
 from checkout_bot import CheckoutError, summary_ok, validate_auth
 
 
+class PaymentPreflightTests(unittest.TestCase):
+    def test_preflight_never_purchases_or_queries_private_apple_stock(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(bot, "AUTH", Path(tmp) / "missing-auth.json"), \
+             patch.object(bot, "PURCHASE_LOCK", Path(tmp) / "missing-lock.json"), \
+             patch.object(bot, "get_config", return_value={
+                 "checkout_mode": "chrome_extension",
+                 "stock_action": "dry_run_bag",
+                 "auto_checkout": False
+             }), \
+             patch.object(bot, "connected_chrome_ready", return_value=True), \
+             patch.object(bot, "fetch_inventory") as fetch, \
+             patch.object(bot, "chrome_checkout_flow") as flow, \
+             patch.object(bot, "attempt_chrome") as pay, \
+             patch("builtins.print") as output:
+            self.assertFalse(bot.payment_preflight())
+            fetch.assert_not_called()
+            flow.assert_not_called()
+            pay.assert_not_called()
+            labels = [str(c.args[0]) for c in output.call_args_list]
+            self.assertTrue(any("NOT READY" in line for line in labels))
+            self.assertTrue(any("Fresh verified Apple stock" in line for line in labels))
+            self.assertTrue(any("Exact store/date/time final review" in line for line in labels))
+
+
 class AuthorizationTests(unittest.TestCase):
     def test_only_256gb(self):
         with self.assertRaises(CheckoutError):
