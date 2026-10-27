@@ -246,7 +246,8 @@ def record_inventory_health(config: dict[str, Any], checked_zips: list[str],
     """
     path = health_path(config)
     try:
-        old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        stored = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        old = stored.get("health", {}) if isinstance(stored, dict) else {}
         if not isinstance(old, dict):
             old = {}
     except (OSError, ValueError, TypeError):
