@@ -151,6 +151,23 @@ The experimental checkout code on `main` is **not validated in Apple's live stor
 
 A completed Apple order cannot be inferred from clicking a button; use Apple's own confirmation. The one-order persistent lock is essential even if checkout crashes or an outcome remains uncertain. An already existing delivery order may result in a second phone purchase.
 
+## Troubleshoot a missing No AppleCare+ option (read-only)
+
+If `dry-run-chrome` stops with `Stopped at applecare: no_applecare_option_missing`, the page did **not** expose the exact selection label the automation expected. That does **not** mean AppleCare is compulsory; the option may be worded differently or presented later.
+
+**Do not enable automatic checkout to diagnose this.** Instead:
+
+1. In your existing, Playwright-connected **normal Chrome**, select the iPhone Duo 256GB product tab (not the Apple Account, bag, or payment tab). Navigate the visible product configurator manually if needed, until you see an AppleCare section.
+2. From `~/iPhone-Duo`, run the **read-only** control inspector:
+
+```bash
+python3 checkout_bot.py inspect-applecare
+```
+
+The inspector never clicks anything, makes an order, reads cookies, or exports a page snapshot. It only prints the **short visible labels** matching AppleCare/coverage-related controls from the selected Apple tab. If nothing appears, it reports that the option is not currently visible, which can mean Apple presents it only after another normal product choice.
+
+Do not share private session information or the full Playwright snapshot. If the controls report different wording, the selector can be adjusted based on those observed labels. A purchase flow must still reject any additional protection plans and check the final order total. Existing Apple checkout automation has **not** been proven safe for unattended payment and must remain disabled until manually tested.
+
 ## Exactly five Apple Stores
 
 Only these five stores are accepted by `pickup_rules.py`. Every other store returned by Apple is ignored for stock events, alerts, and checkout.
