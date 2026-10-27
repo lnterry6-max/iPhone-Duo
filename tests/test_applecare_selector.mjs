@@ -81,7 +81,7 @@ function fixture({labels=[makeLabel('No AppleCare coverage')],delay=0,
             clicks++;
             if(acceptClick&&inputs[index])inputs[index].checked=true;
           }
-        }};
+        }}
       };
       throw Error('unexpected Playwright locator: '+selector);
     },
