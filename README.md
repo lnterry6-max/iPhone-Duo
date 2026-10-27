@@ -107,6 +107,21 @@ Type `ORDER CONFIRMED` when prompted. This creates a durable purchase lock in `~
 
 Chrome extension access is powerful and may include sensitive open tabs. Do not upload the extension connection token, session snapshots, or browser logs to GitHub, and do not bypass any Apple login or human verification checks.
 
+## No AppleCare+ preference and safer dry-run reporting
+
+The Chrome checkout script now explicitly looks for Apple's **No AppleCare+ coverage** or **No AppleCare coverage** selection on the product page, and never chooses a paid AppleCare+ or AppleCare One plan. If the no-coverage option cannot be uniquely found, it **stops** instead of guessing. A final order review that explicitly shows a paid AppleCare plan is also rejected.
+
+The CLI result parser now handles the JSON-quoted response format that previously produced `Chrome checkout result could not be verified`. When a dry run stops, the CLI only logs sanitized values such as `stage=applecare` and `code=no_applecare_option_missing`; never share full browser snapshots, orders, credentials, or payment details.
+
+**Before retrying:** manually check your Apple Shopping Bag and remove any item the previous dry run may have added. Do not re-run a checkout test with an existing phone in the bag. After `git pull`, make sure `AUTO_CHECKOUT=false`, then start a non-paying dry run:
+
+```bash
+cd ~/iPhone-Duo
+python3 checkout_bot.py dry-run-chrome --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
+```
+
+A dry run may navigate checkout and change the shopping bag, but **will never click the final order submission button**. It can still encounter Apple authentication requirements; the script stops rather than bypassing verification. These checks are offline-tested; Apple's actual UI and available pickup appointment are not yet validated.
+
 ## Recovering from HTTP 541 and testing readiness
 
 If your Mac logs `Apple refused the request (HTTP 541)`, **stop the watcher with Control+C**. This means inventory is unknown, *not* out of stock. Do not use proxy rotation, automated CAPTCHA solvers, account-sharing, or other verification bypasses. Apple's undocumented pickup API is not guaranteed to remain available.
