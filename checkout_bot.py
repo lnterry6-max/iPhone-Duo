@@ -383,7 +383,7 @@ def chrome_checkout_flow(stock, max_total: float, allowed_hours: list[int],
         # CLI may print page-related details on error; NEVER log raw CLI output.
         if result.returncode != 0:
             raise CheckoutError("Chrome checkout scripting could not finish safely")
-        match = re.search(r"DUO_AUTOMATION_RESULT=(\\{[^\\n\\r]*?\\})", result.stdout)
+        match = re.search(r"DUO_AUTOMATION_RESULT=(\{[^\n\r]*?\})", result.stdout)
         if not match:
             raise CheckoutError("Chrome checkout returned no verified machine-readable outcome")
         try:
