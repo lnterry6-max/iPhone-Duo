@@ -122,6 +122,55 @@ def connected_chrome_ready() -> bool:
         return False
 
 
+def payment_preflight() -> bool:
+    """Local no-purchase safety report. Never accesses Apple credentials or payment pages.
+
+    This does NOT turn on payment. A report of a working Chrome connection
+    cannot substitute for a verified live inventory response and final review.
+    """
+    from duo_monitor import purchase_lock_reason
+    from pickup_rules import PICKUP_DATE, PICKUP_HOURS, STORE_ADDRESSES
+    config = get_config()
+    checks = []
+    checks.append(("Approved Duo models", "2 fixed 256GB models only", True))
+    checks.append(("Approved stores", f"{len(STORE_ADDRESSES)} specific stores", True))
+    checks.append(("Requested pickup", f"{PICKUP_DATE.isoformat()} at 3 or 4 PM Eastern", True))
+    try:
+        eligible_pickup_hours("Natick")
+        slot_ok = True
+    except PickupConstraintError:
+        slot_ok = False
+    checks.append(("Pickup window still future", "yes" if slot_ok else "NO: expired", slot_ok))
+    locked = purchase_lock_reason()
+    checks.append(("One-order lock", "not present" if not locked else "ACTIVE: do not purchase again", not bool(locked)))
+    chrome = config["checkout_mode"] in ("chrome_extension", "chrome_auto") and connected_chrome_ready()
+    checks.append(("Regular Chrome connection", "connected" if chrome else "not connected", chrome))
+    authorization = False
+    try:
+        a = json.loads(AUTH.read_text(encoding="utf-8"))
+        authorization = (a.get("checkout_mode") == "chrome_auto"
+                         and a.get("status") == "armed"
+                         and a.get("allow_submit") is True
+                         and a.get("quantity") == 1
+                         and float(a.get("expires_at", 0)) > time.time())
+    except (OSError, ValueError, TypeError):
+        pass
+    checks.append(("One-time payment authorization", "active" if authorization else "not armed", authorization))
+    payment_mode = config.get("checkout_mode") == "chrome_auto" and config.get("auto_checkout") is True and config.get("stock_action") == "notify"
+    checks.append(("Payment trigger selected", "armed mode" if payment_mode else "OFF (or nonpaying dry-run selected)", payment_mode))
+    # The user's stock endpoint was refused with HTTP 541; no local data
+    # proves the inventory feed and checkout are currently functioning.
+    checks.append(("Fresh verified Apple stock", "NOT verified by this read-only check", False))
+    checks.append(("Exact store/date/time final review", "NOT verified by this read-only check", False))
+    print("IPHONE DUO PURCHASE PREFLIGHT — READ ONLY, NO PAYMENT")
+    for title, status, passed in checks:
+        print(f"{'PASS' if passed else 'BLOCK'}  {title}: {status}")
+    print("Result: NOT READY for unattended payment without fresh stock and validated final review.")
+    print("Do not upload Apple passwords, payment details, session cookies or Chrome tokens to GitHub.")
+    print("Existing Apple delivery order must be considered before any second purchase.")
+    return False
+
+
 def arm(args: argparse.Namespace) -> None:
     mode = get_config()["checkout_mode"]
     if mode == "chrome_auto":
@@ -732,6 +781,7 @@ def main() -> int:
     a = commands.add_parser("arm", help="Explicitly authorize ONE automated purchase for limited time")
     a.add_argument("--max-total", type=float, required=True, help="Maximum USD charge including tax")
     a.add_argument("--hours", type=float, default=4)
+    commands.add_parser("preflight", help="Read-only payment safety checks, no Apple requests or charges")
     commands.add_parser("disarm", help="Revoke purchase authorization")
     commands.add_parser("inspect-applecare", help="Read-only Chrome AppleCare labels; no cart or payment changes")
     commands.add_parser("inspect-test-product", help="Read-only Chrome pickup UI test for a different Apple product")
@@ -763,6 +813,8 @@ def main() -> int:
             login()
         elif args.command == "arm":
             arm(args)
+        elif args.command == "preflight":
+            payment_preflight()
         elif args.command == "inspect-applecare":
             inspect_applecare()
         elif args.command == "inspect-test-product":
