@@ -233,6 +233,22 @@ The inspector never clicks anything, makes an order, reads cookies, or exports a
 
 Do not share private session information or the full Playwright snapshot. If the controls report different wording, the selector can be adjusted based on those observed labels. A purchase flow must still reject any additional protection plans and check the final order total. Existing Apple checkout automation has **not** been proven safe for unattended payment and must remain disabled until manually tested.
 
+## October 26, 10:34 PM — “I'll pick it up” at checkout
+
+The bag-only dry run reached **Apple's pickup versus delivery selection** but stopped at `pickup / bag_checkout_verify / expected_control_missing`. The checkout flow previously expected a generic `Pick Up` button, while Apple actually shows **“I'll pick it up”**.
+
+The script now waits for the **exact pickup choice** (including the curly-apostrophe variant), selects its regular button, link, or radio control, and rejects **delivery** and **Apple Pay/Express Checkout** options. If the choice is absent or a human-verification challenge appears, it stops instead of guessing. This is still an unvalidated live integration.
+
+**Because your shopping bag already contains one 256GB Star White Duo, use the bag-only command; do not add another phone:**
+
+```bash
+cd ~/iPhone-Duo
+git pull
+python3 checkout_bot.py dry-run-bag --sku MK1E4LL/A --store-name Natick --zip-code 01609 --max-total 2200
+```
+
+The test should click **Check Out → I'll pick it up**, then attempt to find Apple's store search/location field. It can stop there if the interface differs. No order is submitted, `AUTO_CHECKOUT=false` must remain in your local `.env`, and your current bag does not reserve pickup inventory.
+
 ## Resume the existing Apple bag without adding another phone
 
 **October 26 evening:** The real Chrome dry run reached `https://www.apple.com/shop/bag`, showing **one iPhone Duo 256GB Star White** and a displayed bag total of **$2,123.94**. The checkout code then stopped with `bag_checkout_ambiguous` because Apple's bag may have more than one identical **Check Out** control. The standard Checkout selector now chooses the first enabled exact-match button (or matching link) and **never** matches `Check out with Apple Pay`.
