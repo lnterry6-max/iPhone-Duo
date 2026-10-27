@@ -425,7 +425,7 @@ def launch_nonpaying_stock_dry_run(stock: Stock, config: dict[str, Any]) -> bool
         json.dump({"sku": stock.sku, "store": stock.store,
                    "triggered_at": datetime.now(timezone.utc).isoformat(),
                    "mode": "nonpaying_dry_run"}, f)
-        f.write("\\n")
+        f.write("\n")
     args = [sys.executable, str(script), "dry-run-bag", "--sku", stock.sku,
             "--store-name", canonical_store(stock.store),
             "--zip-code", stock.zip_code, "--max-total", "2200"]
@@ -534,6 +534,22 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
     return not errors
 
 
+def simulate_stock_trigger(config: dict[str, Any], sku: str, store: str) -> bool:
+    """Offline trigger test, NEVER an availability claim or payment attempt."""
+    approved = canonical_store(store)
+    if sku not in PRODUCTS or approved is None:
+        raise ValueError("Only the two approved 256GB Duo SKUs and five Apple Stores can trigger checkout")
+    stock = Stock(approved, "SIMULATED-NOT-REAL", sku, PRODUCTS[sku],
+                  "in_stock", "01609")
+    LOG.warning("SIMULATION ONLY: %s, Apple %s; this does NOT indicate live stock",
+                stock.label, stock.store)
+    if config.get("stock_action") != "dry_run_bag":
+        LOG.info("STOCK_ACTION=notify: stock alert would be generated; NO browser or purchase activity")
+        return True
+    LOG.info("Testing local one-time NONPAYING checkout trigger using existing bag")
+    return launch_nonpaying_stock_dry_run(stock, config)
+
+
 def doctor(config: dict[str, Any]) -> bool:
     """Read-only readiness check. Does not contact Apple's rate-limited inventory API."""
     LOG.info("Allowed stores: Blackstone Valley, Natick, Boylston Street, Chestnut Hill, Legacy Place")
@@ -574,9 +590,11 @@ def doctor(config: dict[str, Any]) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Monitor iPhone Duo 256GB pickup availability near ZIP 01609")
-    parser.add_argument("command", nargs="?", choices=["watch", "once", "test-alert", "prepare-checkout", "mark-purchased", "doctor"], default="once")
+    parser.add_argument("command", nargs="?", choices=["watch", "once", "test-alert", "prepare-checkout", "mark-purchased", "doctor", "simulate-stock"], default="once")
     parser.add_argument("--env", default=".env", help="Read local .env file (never commit secrets)")
     parser.add_argument("--no-notify", action="store_true", help="Do stock lookup without sending notifications")
+    parser.add_argument("--sku", choices=list(PRODUCTS), default="MK1E4LL/A", help="Simulated-stock Duo SKU only")
+    parser.add_argument("--store-name", default="Natick", help="Approved simulated store only")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
     load_env(Path(args.env))
@@ -587,6 +605,8 @@ def main() -> int:
         config = get_config()
         if args.command == "doctor":
             return 0 if doctor(config) else 2
+        if args.command == "simulate-stock":
+            return 0 if simulate_stock_trigger(config, args.sku, args.store_name) else 2
         if args.command == "prepare-checkout":
             LOG.info("Opening Apple Store for safe browser handoff (mode %s).", config["checkout_mode"])
             LOG.info("No order is placed; use Apple checkout directly in your browser.")
