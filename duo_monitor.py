@@ -50,6 +50,30 @@ def purchase_lock_reason() -> str | None:
 
 
 
+def mark_purchased() -> None:
+    """Local manual acknowledgment after an accepted Apple order; stops future scans."""
+    if PURCHASE_LOCK.exists():
+        print("Purchase lock already exists. Stock monitoring is stopped.")
+        return
+    print("Use this ONLY after Apple has accepted your order (check Orders/email).")
+    phrase = input("Type ORDER CONFIRMED to stop all future stock checks: ").strip()
+    if phrase != "ORDER CONFIRMED":
+        raise ValueError("No purchase marked; monitor remains eligible to run")
+    PURCHASE_LOCK.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if os.name == "posix":
+        PURCHASE_LOCK.parent.chmod(0o700)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(PURCHASE_LOCK, flags, 0o600)
+    except FileExistsError:
+        print("Purchase lock already exists; monitoring has stopped.")
+        return
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"status": "manually_confirmed", "recorded_at": datetime.now(timezone.utc).isoformat()}, f)
+        f.write("\n")
+    LOG.warning("Apple purchase marked confirmed locally. Watcher will shut down; no more restock opens.")
+
+
 class InventoryError(Exception):
     """Network, format, or availability API failure (never assume out of stock)."""
 
@@ -444,13 +468,16 @@ def check(config: dict[str, Any], *, send: bool = True) -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Monitor iPhone Duo 256GB pickup availability near ZIP 01609")
-    parser.add_argument("command", nargs="?", choices=["watch", "once", "test-alert", "prepare-checkout"], default="once")
+    parser.add_argument("command", nargs="?", choices=["watch", "once", "test-alert", "prepare-checkout", "mark-purchased"], default="once")
     parser.add_argument("--env", default=".env", help="Read local .env file (never commit secrets)")
     parser.add_argument("--no-notify", action="store_true", help="Do stock lookup without sending notifications")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(message)s")
     load_env(Path(args.env))
     try:
+        if args.command == "mark-purchased":
+            mark_purchased()
+            return 0
         config = get_config()
         if args.command == "prepare-checkout":
             LOG.info("Opening Apple Store for safe browser handoff (mode %s).", config["checkout_mode"])
