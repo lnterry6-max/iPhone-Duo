@@ -101,8 +101,42 @@ async page => {
       return {kind:found[0].readable?'found':'unverifiable', ...found[0]};
     });
 
-    // No blind clicks or XPath guessing; wait for the observed HTML to render.
-    for (let attempt=0; attempt<50; attempt++) {
+    // Select only the one observed no-coverage option. A label may be
+    // partially off-screen in a narrow Chrome window; prefer its visible
+    // exact text, and scroll controls into view before a native click.
+    const verifySelected = async index => {
+      operation = 'care_verify_selection';
+      for (let i=0;i<5;i++) {
+        const current = await discover();
+        if (current.kind === 'found' && current.index === index && current.checked) {
+          operation = 'care_confirm_no_challenge';
+          await stopOnChallenge();
+          return true;
+        }
+        if (current.kind === 'ambiguous' || current.kind === 'unverifiable') {
+          throw Error('no_applecare_selection_unverified');
+        }
+        await page.waitForTimeout(250);
+      }
+      return false;
+    };
+
+    const clickMethod = async (target, name) => {
+      operation = 'care_' + name + '_scroll';
+      try {
+        await target.scrollIntoViewIfNeeded({timeout:3500});
+        operation = 'care_' + name + '_click';
+        await target.click({timeout:4000});
+        return true;
+      } catch (error) {
+        // No raw error data is retained (may contain page details).
+        operation = 'care_' + name + '_failed';
+        await stopOnChallenge();
+        return false;
+      }
+    };
+
+    for (let attempt=0;attempt<32;attempt++) {
       operation = 'care_challenge_check';
       await stopOnChallenge();
       operation = 'care_discover_label';
@@ -110,24 +144,23 @@ async page => {
       if (state.kind === 'ambiguous') throw Error('no_applecare_control_ambiguous');
       if (state.kind === 'unverifiable') throw Error('no_applecare_selection_unverified');
       if (state.kind === 'found') {
-        if (!state.checked) {
-          operation = 'care_click_exact_label';
-          await page.locator('label').nth(state.index).click({timeout:7000});
+        if (state.checked) {
+          operation = 'care_confirm_no_challenge';
+          await stopOnChallenge();
+          return true;
         }
-        operation = 'care_verify_selection';
-        for (let verify=0; verify<5; verify++) {
-          const next = await discover();
-          if (next.kind === 'found' && next.index === state.index && next.checked) {
-            operation = 'care_confirm_no_challenge';
-            await stopOnChallenge();
-            return true;
-          }
-          if (next.kind === 'ambiguous' || next.kind === 'unverifiable') {
-            throw Error('no_applecare_selection_unverified');
-          }
-          await page.waitForTimeout(300);
+        // Normal visible clicks only. No force:true, JS-dispatched click,
+        // CAPTCHA bypass, or a click on a different AppleCare option.
+        operation = 'care_find_exact_text';
+        const text = page.getByText(/^\s*No AppleCare(?:\+)? coverage\s*$/i, {exact:true});
+        const count = await text.count();
+        if (count === 1 && await text.isVisible()) {
+          if (await clickMethod(text,'text') && await verifySelected(state.index)) return true;
         }
-        throw Error('no_applecare_selection_unverified');
+        operation = 'care_find_exact_label';
+        const label = page.locator('label').nth(state.index);
+        if (await clickMethod(label,'label') && await verifySelected(state.index)) return true;
+        throw Error('no_applecare_click_failed');
       }
       operation = 'care_wait_for_render';
       await page.waitForTimeout(500);
@@ -263,7 +296,8 @@ async page => {
       'order_total_not_proven','price_above_cap','zip_entry_missing',
       'pickup_store_missing','pickup_time_selector_missing','review_navigation_missing',
       'final_order_button_missing','no_applecare_option_missing',
-      'no_applecare_selection_unverified','no_applecare_control_ambiguous',
+      'no_applecare_selection_unverified','no_applecare_click_failed',
+      'no_applecare_control_ambiguous',
       'no_applecare_not_verified',
       'unexpected_applecare'
     ]);
